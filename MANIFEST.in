@@ -1,0 +1,68 @@
+# Include important files in the package distribution
+include README.md
+include LICENSE
+include requirements.txt
+include pyproject.toml
+
+# Include all Python files
+recursive-include s3vectors *.py
+
+# Include S3 Vectors service models (CRITICAL for functionality)
+recursive-include models *.json
+
+# Exclude development and build files
+exclude *.sh
+exclude *.bak
+exclude *.backup
+exclude *_backup
+exclude *_old
+exclude *.old
+exclude *.orig
+exclude *.tmp
+exclude *.temp
+exclude *~
+exclude *.swp
+exclude *.swo
+exclude .DS_Store
+exclude *.rej
+exclude Makefile
+exclude DEPLOYMENT.md
+exclude .gitignore
+exclude activate.sh
+exclude create_distribution.sh
+exclude examples.sh
+exclude test_*.py
+exclude test_*.txt
+exclude test_*.jpg
+exclude query-file.txt
+exclude long-test.txt
+exclude sample-text.txt
+
+# Exclude directories
+prune build
+prune dist
+prune venv
+prune .git
+prune __pycache__
+prune *.egg-info
+prune test_*
+prune sample
+# REMOVED: prune models  # This was breaking S3 Vectors functionality!
+prune .vscode
+prune .idea
+prune node_modules
+prune .pytest_cache
+prune .coverage
+prune htmlcov
+
+# Exclude common backup/temp patterns
+global-exclude *~
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude *.pyd
+global-exclude __pycache__
+global-exclude .git*
+global-exclude .DS_Store
+global-exclude *.so
+global-exclude *.egg
+global-exclude *.egg-info

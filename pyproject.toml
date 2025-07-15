@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "s3vectors-embed-cli"
+version = "1.0.0"
+description = "Standalone CLI for S3 Vector operations with Bedrock embeddings"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Vaibhav Sabharwal", email = "vsabhar@amazon.com"}
+]
+maintainers = [
+    {name = "Vaibhav Sabharwal", email = "vsabhar@amazon.com"}
+]
+keywords = ["aws", "s3", "vectors", "embeddings", "bedrock", "cli", "machine-learning", "ai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Utilities",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Environment :: Console",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "boto3>=1.39.5",
+    "botocore>=1.39.5",
+    "click>=8.0.0",
+    "rich>=12.0.0",
+    "pydantic>=1.10.0",
+]
+
+[project.scripts]
+s3vectors-embed = "s3vectors.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/awslabs/s3vectors-embed-cli"
+Repository = "https://github.com/awslabs/s3vectors-embed-cli"
+Issues = "https://github.com/awslabs/s3vectors-embed-cli/issues"
+Documentation = "https://github.com/awslabs/s3vectors-embed-cli#readme"
+Source = "https://github.com/awslabs/s3vectors-embed-cli"
+
+[tool.setuptools]
+packages = ["s3vectors", "s3vectors.commands", "s3vectors.core", "s3vectors.utils"]
+
+[tool.setuptools.package-data]
+s3vectors = ["py.typed"]
