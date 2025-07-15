@@ -203,7 +203,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
             # Handle multimodal input (text + image) for Titan Image v1
             result = _process_multimodal_input(
                 text_value, image, vector_bucket_name, index_name, model_id,
-                bedrock_service, s3vector_service, metadata_dict, key, console
+                bedrock_service, s3vector_service, s3_client, metadata_dict, key, console
             )
         elif text_value:
             result = _process_text_value(
@@ -234,7 +234,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
 
 
 def _process_multimodal_input(text_value, image_path, vector_bucket_name, index_name, model_id,
-                             bedrock_service, s3vector_service, metadata_dict, key, console):
+                             bedrock_service, s3vector_service, s3_client, metadata_dict, key, console):
     """Process multimodal input (text + image) for Titan Image v1."""
     
     # Get index dimensions first
@@ -246,8 +246,24 @@ def _process_multimodal_input(text_value, image_path, vector_bucket_name, index_
         image_task = progress.add_task("Processing image...", total=None)
         try:
             import base64
-            with open(image_path, 'rb') as image_file:
-                image_data = base64.b64encode(image_file.read()).decode('utf-8')
+            
+            # Check if it's an S3 URI or local file
+            if image_path.startswith('s3://'):
+                # Parse S3 URI
+                path_part = image_path[5:]  # Remove 's3://'
+                if '/' not in path_part:
+                    raise ValueError(f"Invalid S3 URI format: {image_path}")
+                
+                bucket, key = path_part.split('/', 1)
+                
+                # Read from S3
+                response = s3_client.get_object(Bucket=bucket, Key=key)
+                image_data = base64.b64encode(response['Body'].read()).decode('utf-8')
+            else:
+                # Read local file
+                with open(image_path, 'rb') as image_file:
+                    image_data = base64.b64encode(image_file.read()).decode('utf-8')
+                    
             progress.update(image_task, description="Image processed ✓")
         except Exception as e:
             raise click.ClickException(f"Failed to read image file: {str(e)}")
@@ -260,8 +276,7 @@ def _process_multimodal_input(text_value, image_path, vector_bucket_name, index_
         # Prepare metadata - add both text and image info
         metadata_dict.update({
             'S3VECTORS-EMBED-SRC-CONTENT': text_value,
-            'S3VECTORS-EMBED-SRC-LOCATION': image_path,
-            'S3VECTORS-EMBED-INPUT-TYPE': 'multimodal'
+            'S3VECTORS-EMBED-SRC-LOCATION': image_path
         })
         
         # Generate vector ID if not provided
