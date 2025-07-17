@@ -99,10 +99,13 @@ def _get_index_dimensions(s3vector_service, vector_bucket_name, index_name, cons
 @click.command()
 @click.option('--vector-bucket-name', required=True, help='S3 bucket name for vector storage')
 @click.option('--index-name', required=True, help='Vector index name')
-@click.option('--model-id', required=True, help='Bedrock embedding model ID (e.g., amazon.titan-embed-text-v2:0, amazon.titan-embed-image-v1, cohere.embed-english-v3)')
+@click.option('--model-id', required=True, help='Bedrock embedding model ID (e.g., amazon.titan-embed-text-v2:0, amazon.titan-embed-image-v1, cohere.embed-english-v3, twelvelabs.marengo-embed-2-7-v1:0)')
 @click.option('--text-value', help='Direct text input to embed')
 @click.option('--text', help='Text file path (local file, S3 URI, or S3 wildcard pattern like s3://bucket/folder/*.txt)')
 @click.option('--image', help='Image file path (local file, S3 URI, or S3 wildcard pattern like s3://bucket/images/*.jpg)')
+@click.option('--video', help='Video file path (local file or S3 URI) for video embedding models')
+@click.option('--s3-output-bucket', help='S3 bucket for async output (required for video embedding)')
+@click.option('--s3-output-prefix', help='S3 prefix for async output (optional)')
 @click.option('--key', help='Custom vector key (auto-generated UUID if not provided)')
 @click.option('--metadata', help='JSON metadata to attach to the vector (e.g., \'{"category": "docs", "version": "1.0"}\')')
 @click.option('--src-bucket-owner', help='Source bucket owner AWS account ID for cross-account S3 access')
@@ -111,16 +114,16 @@ def _get_index_dimensions(s3vector_service, vector_bucket_name, index_name, cons
 @click.option('--output', type=click.Choice(['table', 'json']), default='json', help='Output format (default: json)')
 @click.option('--region', help='AWS region (overrides session/config defaults)')
 @click.pass_context
-def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, image,
-              key, metadata, src_bucket_owner, use_object_key_name,
+def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, image, video,
+              s3_output_bucket, s3_output_prefix, key, metadata, src_bucket_owner, use_object_key_name,
               max_workers, output, region):
     """Embed text or image content and store as vectors in S3.
     
     \b
     SUPPORTED INPUT TYPES:
     • Direct text: --text-value "your text here"
-    • Local files: --text /path/to/file.txt or --image /path/to/image.jpg
-    • S3 files: --text s3://bucket/file.txt or --image s3://bucket/image.jpg
+    • Local files: --text /path/to/file.txt or --image /path/to/image.jpg or --video /path/to/video.mp4
+    • S3 files: --text s3://bucket/file.txt or --image s3://bucket/image.jpg or --video s3://bucket/video.mp4
     • S3 wildcards: --text "s3://bucket/folder/*.txt" or --image "s3://bucket/images/*.jpg"
     • Multimodal: --text-value "description" --image /path/to/image.jpg (Titan Image v1 only)
     
@@ -131,6 +134,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
     • amazon.titan-embed-image-v1 (1024, 384, 256 dimensions, supports text+image)
     • cohere.embed-english-v3 (1024 dimensions, fixed)
     • cohere.embed-multilingual-v3 (1024 dimensions, fixed)
+    • twelvelabs.marengo-embed-2-7-v1:0 (1024 dimensions, video embedding)
      
     
     \b
@@ -158,6 +162,17 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
     # Multimodal embedding (Titan Image v1)
     s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \\
       --model-id amazon.titan-embed-image-v1 --text-value "A red car" --image car.jpg
+      
+    # Video embedding (Twelvelabs)
+    s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \\
+      --model-id twelvelabs.marengo-embed-2-7-v1:0 --video s3://source-bucket/videos/video.mp4 \\
+      --s3-output-bucket output-bucket --s3-output-prefix video-embeddings \\
+      --src-bucket-owner 123456789012  # Your AWS account ID is required
+      
+    # Note: Video embedding is asynchronous. The command will return immediately and store a
+    # placeholder vector. The actual embedding will be available in the S3 output location
+    # when the job completes. You can check the status with:
+    # aws bedrock-runtime get-async-invoke --invocation-arn '<invocation-arn>'
     
     # Debug mode for troubleshooting
     s3vectors-embed --debug put --vector-bucket-name my-bucket --index-name my-index \\
@@ -170,13 +185,16 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
     region = get_region(session, region)
     
     # Validate input - at least one input must be provided
-    inputs_provided = sum(bool(x) for x in [text_value, text, image])
+    inputs_provided = sum(bool(x) for x in [text_value, text, image, video])
     if inputs_provided == 0:
-        raise click.ClickException("At least one input must be provided: --text-value, --text, or --image")
+        raise click.ClickException("At least one input must be provided: --text-value, --text, --image, or --video")
     
     # Special case: Allow multimodal input (text-value + image) for Titan Image v1 model
     is_multimodal_titan = (model_id.startswith('amazon.titan-embed-image') and 
-                          text_value and image and not text)
+                          text_value and image and not text and not video)
+    
+    # Special case for video embedding with Twelvelabs model
+    is_video_twelvelabs = video and model_id.startswith('twelvelabs.marengo-embed')
     
     if inputs_provided > 1 and not is_multimodal_titan:
         raise click.ClickException("Only one input type can be specified at a time, except for multimodal input with Titan Image v1 (--text-value + --image)")
@@ -223,6 +241,54 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
                 bedrock_service, s3vector_service, s3_client, metadata_dict,
                 src_bucket_owner, use_object_key_name, max_workers,
                 key, console, region
+            )
+        elif video:
+            # Check if video is an S3 URI
+            if not video.startswith('s3://'):
+                raise click.ClickException(
+                    "Video embedding currently only supports S3 URIs. "
+                    "Please upload your video to S3 first and provide the S3 URI."
+                )
+                
+            # Check if s3_output_bucket is provided
+            if not s3_output_bucket:
+                raise click.ClickException(
+                    "Video embedding requires an S3 output bucket for async processing. "
+                    "Please provide an S3 bucket using the --s3-output-bucket parameter."
+                )
+                
+            # Check if src_bucket_owner is provided
+            if not src_bucket_owner:
+                raise click.ClickException(
+                    "Video embedding requires the bucket owner AWS account ID. "
+                    "Please provide your AWS account ID using the --src-bucket-owner parameter."
+                )
+                
+            # Create S3 output URI
+            s3_output_uri = f"s3://{s3_output_bucket}"
+            if s3_output_prefix:
+                s3_output_uri = f"{s3_output_uri}/{s3_output_prefix}"
+                
+            # Import the video processing module
+            from s3vectors.commands.embed_put_video import process_video_input
+            
+            # Define embedding options
+            embedding_options = ["visual-text", "audio"]
+            
+            # Process video
+            result = process_video_input(
+                video_s3_uri=video,
+                vector_bucket_name=vector_bucket_name,
+                index_name=index_name,
+                model_id=model_id,
+                bedrock_service=bedrock_service,
+                s3vector_service=s3vector_service,
+                metadata_dict=metadata_dict,
+                s3_output_uri=s3_output_uri,
+                bucket_owner=src_bucket_owner,
+                vector_id=key,
+                embedding_options=embedding_options,
+                console=console
             )
         
         # Display results
@@ -492,6 +558,16 @@ def _display_results(result, output_format, console):
                 "embeddingDimensions": result['embeddingDimensions'],
                 "metadata": result['metadata']
             }
+        elif result['type'] == 'async':
+            json_data = {
+                "key": result['key'],
+                "bucket": result['bucket'],
+                "index": result['index'],
+                "model": result['model'],
+                "contentType": result['contentType'],
+                "invocationArn": result.get('invocationArn'),
+                "s3OutputUri": result.get('s3OutputUri')
+            }
         else:  # batch
             json_data = {
                 "Keys": result['keys'],
@@ -520,6 +596,25 @@ def _display_results(result, output_format, console):
             
             console.print(table)
             console.print(f"\n[green]✓ Successfully stored vector with key: {result['key']}[/green]")
+        elif result['type'] == 'async':
+            table = Table(title="Async Video Embedding Job")
+            table.add_column("Property", style="cyan")
+            table.add_column("Value", style="green")
+            
+            table.add_row("Key", result['key'])
+            table.add_row("Bucket", result['bucket'])
+            table.add_row("Index", result['index'])
+            table.add_row("Model", result['model'])
+            table.add_row("Content Type", result['contentType'])
+            
+            if 'invocationArn' in result and result['invocationArn']:
+                table.add_row("Invocation ARN", result['invocationArn'])
+                
+            if 's3OutputUri' in result:
+                table.add_row("S3 Output URI", result['s3OutputUri'])
+            
+            console.print(table)
+            console.print(f"\n[green]✓ Successfully started async video embedding job[/green]")
         else:  # batch
             table = Table(title="Batch Processing Results")
             table.add_column("Property", style="cyan")
