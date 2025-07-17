@@ -169,10 +169,11 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
       --s3-output-bucket output-bucket --s3-output-prefix video-embeddings \\
       --src-bucket-owner 123456789012  # Your AWS account ID is required
       
-    # Note: Video embedding is asynchronous. The command will return immediately and store a
-    # placeholder vector. The actual embedding will be available in the S3 output location
-    # when the job completes. You can check the status with:
-    # aws bedrock-runtime get-async-invoke --invocation-arn '<invocation-arn>'
+    # Note: Video embedding uses Bedrock's async API. The command will:
+    # 1. Start an async job
+    # 2. Wait for it to complete (this may take several minutes)
+    # 3. Retrieve the embedding from S3
+    # 4. Store all video segment embeddings in the vector index
     
     # Debug mode for troubleshooting
     s3vectors-embed --debug put --vector-bucket-name my-bucket --index-name my-index \\
