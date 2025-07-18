@@ -2,12 +2,14 @@
 
 Amazon S3 Vectors Embed CLI is a standalone command-line tool that simplifies the process of working with vector embeddings in S3 Vectors. You can create vector embeddings for your data using Amazon Bedrock and store and query them in your S3 vector index using single commands. 
 
-Amazon S3 Vectors Embed CLI is in preview release and is subject to change.
+** Amazon S3 Vectors Embed CLI is in preview release and is subject to change.**
 
 ## Supported Commands
 
 **s3vectors-embed put**: Embed text, file content, or S3 objects and store them as vectors in an S3 vector index.
 You can create and ingest vector embeddings into an S3 vector index using a single put command. You specify the data input you want to create an embedding for, an Amazon Bedrock embeddings model ID, your S3 vector bucket name, and S3 vector index name. The command supports several input formats including text data, a local text or image file, an S3 image or text object or prefix. The command generates embeddings using the dimensions configured in your S3 vector index properties. If you are ingesting embeddings for several objects in an S3 prefix or local file path, it automatically uses batch processes to maximize throughput. 
+
+**Note**: Each file is processed as a single embedding. Document chunking is not currently supported. 
 
 **s3vectors-embed query**: Embed a query input and search for similar vectors in an S3 vector index.
 You can perform similarity queries for vector embeddings in your S3 vector index using a single query command. You specify your query input, an Amazon Bedrock embeddings model ID, the vector bucket name, and vector index name. The command accepts several types of query inputs like a text string, an image file, or a single S3 text or image object. The command generates embeddings for your query using the input embeddings model and then performs a similarity search to find the most relevant matches. You can control the number of results returned, apply metadata filters to narrow your search, and choose whether to include similarity distance in the results for comprehensive analysis.
