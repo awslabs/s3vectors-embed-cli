@@ -2,7 +2,7 @@
 
 Amazon S3 Vectors Embed CLI is a standalone command-line tool that simplifies the process of working with vector embeddings in S3 Vectors. You can create vector embeddings for your data using Amazon Bedrock and store and query them in your S3 vector index using single commands. 
 
-** Amazon S3 Vectors Embed CLI is in preview release and is subject to change.**
+**Amazon S3 Vectors Embed CLI is in preview release and is subject to change.**
 
 ## Supported Commands
 
