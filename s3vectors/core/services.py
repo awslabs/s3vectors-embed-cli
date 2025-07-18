@@ -17,6 +17,7 @@ class BedrockService:
         self.bedrock_runtime = session.client('bedrock-runtime', region_name=region)
         self.debug = debug
         self.console = console
+        self.region = region
         
         if self.debug and self.console:
             self.console.print(f"[dim] BedrockService initialized for region: {region}[/dim]")
@@ -217,6 +218,198 @@ class BedrockService:
             
         except ClientError as e:
             raise Exception(f"Bedrock image embedding failed: {e}")
+            
+    def embed_video_async(self, model_id: str, s3_video_uri: str, s3_output_uri: str, 
+                         embedding_options: List[str] = None, bucket_owner: str = None,
+                         max_wait_time: int = 1800, poll_interval: int = 10, console=None) -> Dict[str, Any]:
+        """
+        Embed video using Bedrock async API with the specified S3 locations.
+        Polls until the job completes and returns the embedding.
+        
+        Args:
+            model_id: The Bedrock model ID (e.g., twelvelabs.marengo-embed-2-7-v1:0)
+            s3_video_uri: The S3 URI of the video file (e.g., s3://bucket/path/video.mp4)
+            s3_output_uri: The S3 URI where the output should be stored (e.g., s3://bucket/output)
+            embedding_options: List of embedding options (e.g., ["visual-text", "audio"])
+            bucket_owner: The AWS account ID that owns the bucket (REQUIRED)
+            max_wait_time: Maximum time to wait for async job completion in seconds (default: 30 minutes)
+            poll_interval: Time between job status checks in seconds (default: 10 seconds)
+            console: Rich console for output (optional)
+            
+        Returns:
+            List[float]: The video embedding vector
+            
+        Raises:
+            ValueError: If the video doesn't meet requirements or model is unsupported
+            Exception: For API errors or timeout
+        """
+        if not model_id.startswith('twelvelabs.marengo-embed'):
+            raise ValueError(f"Unsupported video embedding model: {model_id}. Use twelvelabs.marengo-embed-2-7-v1:0")
+        
+        if not s3_video_uri.startswith('s3://'):
+            raise ValueError(f"Invalid S3 URI format for video: {s3_video_uri}. Must start with 's3://'")
+            
+        if not s3_output_uri.startswith('s3://'):
+            raise ValueError(f"Invalid S3 URI format for output: {s3_output_uri}. Must start with 's3://'")
+            
+        if not bucket_owner:
+            raise ValueError("The 'bucket_owner' parameter is required for video embedding. Please provide your AWS account ID.")
+        
+        # Default embedding options if not provided
+        if not embedding_options:
+            embedding_options = ["visual-text", "audio"]
+        
+        try:
+            # Prepare the model input for async invocation exactly as in your example
+            model_input = {
+                "inputType": "video",
+                "mediaSource": {
+                    "s3Location": {
+                        "uri": s3_video_uri,
+                        "bucketOwner": bucket_owner  # Always include bucketOwner since it's required
+                    }
+                },
+                "embeddingOption": embedding_options
+            }
+            
+            # Prepare output data config
+            output_data_config = {
+                "s3OutputDataConfig": {
+                    "s3Uri": s3_output_uri,
+                    "bucketOwner": bucket_owner  # Include bucketOwner in the output config as well
+                }
+            }
+            
+            self._debug_log(f"Starting async video embedding with model: {model_id}")
+            self._debug_log(f"Video S3 URI: {s3_video_uri}")
+            self._debug_log(f"Output S3 URI: {s3_output_uri}")
+            
+            # Start the async job
+            response = self.bedrock_runtime.start_async_invoke(
+                modelId=model_id,
+                modelInput=model_input,
+                outputDataConfig=output_data_config
+            )
+            
+            # Get the invocation ARN from the response
+            invocation_arn = response.get('invocationArn')
+            if not invocation_arn:
+                raise Exception("Failed to get invocationArn from async invoke response")
+                
+            # Extract the invocation ID from the ARN
+            invocation_id = invocation_arn.split('/')[-1]
+            self._debug_log(f"Async job started with invocation ID: {invocation_id}")
+            
+            # Store the invocation ARN for the caller
+            self.last_invocation_arn = invocation_arn
+            
+            # Poll for job completion
+            self._debug_log(f"Polling for job completion, will wait up to {max_wait_time} seconds")
+            if console:
+                console.print(f"[yellow]Async video embedding job started. This may take several minutes...[/yellow]")
+                console.print(f"[yellow]Invocation ARN: {invocation_arn}[/yellow]")
+            
+            start_time = time.time()
+            while time.time() - start_time < max_wait_time:
+                try:
+                    # Check the status of the async job
+                    status_response = self.bedrock_runtime.get_async_invoke(
+                        invocationArn=invocation_arn
+                    )
+                    
+                    status = status_response.get('status')
+                    self._debug_log(f"Job status: {status}")
+                    
+                    if console and time.time() - start_time > 30:  # Show status updates after 30 seconds
+                        elapsed = int(time.time() - start_time)
+                        if elapsed % 30 == 0:  # Update every 30 seconds
+                            console.print(f"[yellow]Job status: {status} (elapsed: {elapsed} seconds)[/yellow]")
+                    
+                    if status == 'Completed':
+                        if console:
+                            console.print(f"[green]Job completed successfully![/green]")
+                        
+                        # Job completed, now we need to get the results from S3
+                        # The output file is named "output.json" in the specified S3 output location
+                        output_s3_uri = f"{s3_output_uri.rstrip('/')}/{invocation_id}/output.json"
+                        self._debug_log(f"Job completed, retrieving results from {output_s3_uri}")
+                        
+                        if console:
+                            console.print(f"[yellow]Retrieving embedding from {output_s3_uri}[/yellow]")
+                        
+                        # Parse S3 URI to get bucket and key
+                        output_bucket = output_s3_uri.split('/')[2]
+                        output_key = '/'.join(output_s3_uri.split('/')[3:])
+                        
+                        # Create S3 client
+                        s3_client = boto3.client('s3', region_name=self.region)
+                        
+                        # Get the results from S3
+                        try:
+                            response = s3_client.get_object(Bucket=output_bucket, Key=output_key)
+                            result_data = json.loads(response['Body'].read().decode('utf-8'))
+                            
+                            # Extract embeddings from response based on the expected format
+                            # The response should have a "data" array containing objects with "embedding" arrays
+                            if 'data' in result_data and isinstance(result_data['data'], list) and len(result_data['data']) > 0:
+                                # Group embeddings by type
+                                embeddings_by_type = {}
+                                for segment in result_data['data']:
+                                    if 'embedding' in segment and 'embeddingOption' in segment:
+                                        embedding_type = segment['embeddingOption']
+                                        if embedding_type not in embeddings_by_type:
+                                            embeddings_by_type[embedding_type] = []
+                                        embeddings_by_type[embedding_type].append({
+                                            'embedding': segment['embedding'],
+                                            'startSec': segment.get('startSec', 0),
+                                            'endSec': segment.get('endSec', 0)
+                                        })
+                                
+                                self._debug_log(f"Found {len(result_data['data'])} total embeddings")
+                                self._debug_log(f"Embedding types: {list(embeddings_by_type.keys())}")
+                                
+                                # Return all embeddings grouped by type
+                                if console:
+                                    total_count = sum(len(embs) for embs in embeddings_by_type.values())
+                                    console.print(f"[green]Successfully retrieved {total_count} embeddings across {len(embeddings_by_type)} types[/green]")
+                                
+                                # Return the full embeddings_by_type dictionary
+                                return {
+                                    'embeddings_by_type': embeddings_by_type,
+                                    'total_count': len(result_data['data']),
+                                    'types': list(embeddings_by_type.keys())
+                                }
+                            else:
+                                self._debug_log(f"Unexpected response format: {result_data}")
+                                raise Exception("No embedding found in the response: Invalid response format")
+                            
+                        except Exception as e:
+                            raise Exception(f"Failed to retrieve results from S3: {str(e)}")
+                        
+                    elif status == 'Failed':
+                        failure_reason = status_response.get('failureMessage', 'Unknown reason')
+                        raise Exception(f"Async job failed: {failure_reason}")
+                    elif status == 'InProgress':
+                        # Job is still in progress, continue polling
+                        self._debug_log("Job is still in progress, continuing to poll...")
+                        
+                    # Wait before polling again
+                    time.sleep(poll_interval)
+                    
+                except ClientError as e:
+                    self._debug_log(f"Bedrock ClientError during status check: {str(e)}")
+                    raise Exception(f"Failed to check async job status: {e}")
+                    
+            # If we get here, we've timed out
+            raise Exception(f"Async job timed out after {max_wait_time} seconds")
+            
+        except ClientError as e:
+            self._debug_log(f"Bedrock ClientError: {str(e)}")
+            raise Exception(f"Bedrock video embedding failed: {e}")
+        except Exception as e:
+            self._debug_log(f"Unexpected error in embed_video_async: {str(e)}")
+            raise
+
 
 
 class S3VectorService:
@@ -308,12 +501,18 @@ class S3VectorService:
             if self.debug and self.console:
                 self._debug_log(f"API parameters: {json.dumps({k: v for k, v in params.items() if k != 'vectors'})}")
             
-            response = self.s3vectors.put_vectors(**params)
+            # Call the API and handle the response
+            try:
+                response = self.s3vectors.put_vectors(**params)
+                self._debug_log(f"Response: {response}")
+            except Exception as e:
+                self._debug_log(f"API call error: {str(e)}")
+                raise
             
             elapsed_time = time.time() - start_time
             self._debug_log(f"S3 Vectors put_vectors batch completed in {elapsed_time:.2f} seconds")
             
-            # Extract vector IDs from the batch
+            # Extract vector IDs from the input batch since the API doesn't return them
             vector_ids = [vector["key"] for vector in vectors]
             self._debug_log(f"Batch stored successfully with {len(vector_ids)} vectors")
             
@@ -364,12 +563,41 @@ class S3VectorService:
             
             # Process response
             results = []
+            seen_vector_ids = set()  # Track seen vector IDs to ensure uniqueness
+            seen_segments = set()  # Track seen segments (type_index) to avoid duplicate segments
+            
             if 'vectors' in response:
                 for vector in response['vectors']:
+                    vector_id = vector.get('key')
+                    metadata = vector.get('metadata', {})
+                    
+                    # Skip duplicates
+                    if vector_id in seen_vector_ids:
+                        if self.debug:
+                            self.console.print(f"[dim] Skipping duplicate vector ID: {vector_id}[/dim]")
+                        continue
+                    
+                    # For video embeddings, check if we've already seen this segment type and index
+                    embed_type = metadata.get('S3VECTORS-EMBED-TYPE')
+                    segment_index = metadata.get('S3VECTORS-EMBED-SEGMENT-INDEX')
+                    
+                    if embed_type and segment_index is not None:
+                        # This is a video segment
+                        segment_key = f"{embed_type}_{segment_index}"
+                        
+                        if segment_key in seen_segments:
+                            if self.debug:
+                                self.console.print(f"[dim] Skipping duplicate segment: {segment_key} (vector ID: {vector_id})[/dim]")
+                            continue
+                        
+                        seen_segments.add(segment_key)
+                    
+                    seen_vector_ids.add(vector_id)
+                    
                     result = {
-                        'vectorId': vector.get('key'),
+                        'vectorId': vector_id,
                         'similarity': vector.get('distance', 0.0),
-                        'metadata': vector.get('metadata', {})
+                        'metadata': metadata
                     }
                     results.append(result)
             

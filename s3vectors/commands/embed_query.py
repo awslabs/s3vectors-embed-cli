@@ -54,11 +54,12 @@ def _get_index_dimensions(s3vector_service, vector_bucket_name, index_name, cons
 @click.option('--return-distance', is_flag=True, help='Return similarity distances in results')
 @click.option('--return-metadata/--no-return-metadata', default=True, help='Return metadata in results (default: true)')
 @click.option('--src-bucket-owner', help='Source bucket owner AWS account ID for cross-account S3 access')
+@click.option('--s3-output-bucket', help='S3 bucket for async output (required for video queries)')
 @click.option('--output', type=click.Choice(['table', 'json']), default='json', help='Output format (default: json)')
 @click.option('--region', help='AWS region (overrides session/config defaults)')
 @click.pass_context
 def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, 
-                k, filter_expr, return_distance, return_metadata, src_bucket_owner, output, region):
+                k, filter_expr, return_distance, return_metadata, src_bucket_owner, s3_output_bucket, output, region):
     """Embed query input and search for similar vectors in S3.
     
     \b
@@ -66,8 +67,10 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input,
     • Direct text: --query-input "search for this text"
     • Local text file: --query-input /path/to/query.txt
     • Local image file: --query-input /path/to/image.jpg
+    • Local video file: --query-input /path/to/video.mp4 (with video embedding model)
     • S3 text file: --query-input s3://bucket/query.txt
     • S3 image file: --query-input s3://bucket/image.jpg
+    • S3 video file: --query-input s3://bucket/video.mp4 (with video embedding model)
     
     \b
     SUPPORTED MODELS:
@@ -76,6 +79,7 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input,
     • amazon.titan-embed-image-v1 (text and image queries)
     • cohere.embed-english-v3 (text queries)
     • cohere.embed-multilingual-v3 (text queries)
+    • twelvelabs.marengo-embed-2-7-v1:0 (video queries, 1024 dimensions)
 
     
     \b
@@ -135,36 +139,66 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input,
         # Get index dimensions first
         dimensions = _get_index_dimensions(s3vector_service, vector_bucket_name, index_name, console, debug)
         
-        # Process query input (text, local file, or S3 file)
-        if query_input.startswith('s3://'):
-            # S3 file processing
-            content_type, content = _process_s3_query_input(query_input, src_bucket_owner, session, region, debug, console)
-        else:
-            # Local file or direct text processing
-            query_path = Path(query_input)
-            if query_path.exists() and query_path.is_file():
-                # It's a local file
-                if query_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
-                    content_type = "image"
-                    with open(query_path, 'rb') as f:
-                        content = f.read()  # Keep as bytes for consistency
-                else:
-                    content_type = "text"
-                    with open(query_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-            else:
-                # It's direct text
-                content_type = "text"
-                content = query_input
+        # Check if this is a video query with Twelvelabs model
+        is_video_query = model_id.startswith('twelvelabs.marengo-embed')
         
-        # Generate query embedding
-        if content_type == "text":
-            query_embedding = bedrock_service.embed_text(model_id, content, dimensions=dimensions)
+        # Initialize S3 client
+        s3_client = session.client('s3', region_name=region)
+        
+        if is_video_query:
+            # Process video query
+            from s3vectors.commands.embed_query_video import process_video_query
+            
+            # Check if s3_output_bucket is provided
+            if not s3_output_bucket:
+                raise click.ClickException(
+                    "Video queries require an S3 output bucket for async processing. "
+                    "Please provide an S3 bucket using the --s3-output-bucket parameter."
+                )
+                
+            # Check if src_bucket_owner is provided
+            if not src_bucket_owner:
+                raise click.ClickException(
+                    "Video queries require the bucket owner AWS account ID. "
+                    "Please provide your AWS account ID using the --src-bucket-owner parameter."
+                )
+                
+            query_embedding = process_video_query(
+                query_input, bedrock_service, s3_client, model_id, 
+                dimensions, src_bucket_owner, s3_output_bucket, console
+            )
+            content_type = "video"
         else:
-            # For images, convert bytes to base64 string if needed
-            if isinstance(content, bytes):
-                content = base64.b64encode(content).decode('utf-8')
-            query_embedding = bedrock_service.embed_image(model_id, content, dimensions=dimensions)
+            # Process text or image query
+            if query_input.startswith('s3://'):
+                # S3 file processing
+                content_type, content = _process_s3_query_input(query_input, src_bucket_owner, session, region, debug, console)
+            else:
+                # Local file or direct text processing
+                query_path = Path(query_input)
+                if query_path.exists() and query_path.is_file():
+                    # It's a local file
+                    if query_path.suffix.lower() in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']:
+                        content_type = "image"
+                        with open(query_path, 'rb') as f:
+                            content = f.read()  # Keep as bytes for consistency
+                    else:
+                        content_type = "text"
+                        with open(query_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                else:
+                    # It's direct text
+                    content_type = "text"
+                    content = query_input
+            
+            # Generate query embedding
+            if content_type == "text":
+                query_embedding = bedrock_service.embed_text(model_id, content, dimensions=dimensions)
+            else:
+                # For images, convert bytes to base64 string if needed
+                if isinstance(content, bytes):
+                    content = base64.b64encode(content).decode('utf-8')
+                query_embedding = bedrock_service.embed_image(model_id, content, dimensions=dimensions)
 
         # Search vectors
         results = s3vector_service.query_vectors(
