@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional
 import boto3
 from botocore.exceptions import ClientError
 
-from s3vectors.utils.user_agent import get_s3vectors_user_agent_config, get_s3vectors_user_agent_string
+from s3vectors.utils.boto_config import get_boto_config, get_user_agent
 
 
 class BedrockService:
@@ -20,14 +20,14 @@ class BedrockService:
         self.bedrock_runtime = session.client(
             'bedrock-runtime', 
             region_name=region,
-            config=get_s3vectors_user_agent_config()
+            config=get_boto_config()
         )
         self.debug = debug
         self.console = console
         
         if self.debug and self.console:
             self.console.print(f"[dim] BedrockService initialized for region: {region}[/dim]")
-            self.console.print(f"[dim] User agent: {get_s3vectors_user_agent_string()}[/dim]")
+            self.console.print(f"[dim] User agent: {get_user_agent()}[/dim]")
     
     def _debug_log(self, message: str):
         """Log debug message if debug mode is enabled."""
@@ -237,7 +237,7 @@ class S3VectorService:
             's3vectors', 
             region_name=region, 
             endpoint_url=endpoint_url,
-            config=get_s3vectors_user_agent_config()
+            config=get_boto_config()
         )
         self.region = region
         self.debug = debug
@@ -246,7 +246,7 @@ class S3VectorService:
         if self.debug and self.console:
             self.console.print(f"[dim] S3VectorService initialized for region: {region}[/dim]")
             self.console.print(f"[dim] Using endpoint: {endpoint_url}[/dim]")
-            self.console.print(f"[dim] User agent: {get_s3vectors_user_agent_string()}[/dim]")
+            self.console.print(f"[dim] User agent: {get_user_agent()}[/dim]")
     
     def _debug_log(self, message: str):
         """Log debug message if debug mode is enabled."""
