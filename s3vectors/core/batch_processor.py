@@ -12,6 +12,8 @@ from enum import Enum
 from typing import List, Dict, Any, Optional, Callable
 from pathlib import Path
 
+from s3vectors.utils.bedrock_params import build_system_payload
+
 
 class ContentType(Enum):
     """Supported content types for batch processing."""
@@ -728,16 +730,22 @@ class BatchProcessor:
             s3_uri = s3_obj['s3_uri']
             content_type = s3_obj['content_type']
             
-            # Read file content
+            # Read file content and build system payload
             if content_type == ContentType.TEXT:
                 bucket, key = s3_uri[5:].split('/', 1)
                 content = self._read_s3_text_file(bucket, key, s3_obj.get('bucket_owner'))
-                embedding = self.bedrock_service.embed_text(model_id, content, dimensions=dimensions)
+                
+                # Build system payload for text
+                system_payload = build_system_payload(model_id, content, "text", dimensions, is_query=False)
+                embedding = self.bedrock_service.embed_with_payload(model_id, system_payload)
                 raw_text = content
             else:  # IMAGE
                 bucket, key = s3_uri[5:].split('/', 1)
                 image_data = self._read_s3_image_file(bucket, key, s3_obj.get('bucket_owner'))
-                embedding = self.bedrock_service.embed_image(model_id, image_data, dimensions=dimensions)
+                
+                # Build system payload for image
+                system_payload = build_system_payload(model_id, image_data, "image", dimensions, is_query=False)
+                embedding = self.bedrock_service.embed_with_payload(model_id, system_payload)
                 raw_text = f"Image file: {s3_uri}"
             
             # Build metadata based on content type
@@ -788,13 +796,19 @@ class BatchProcessor:
                 content_type = ContentType.TEXT
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = f.read()
-                embedding = self.bedrock_service.embed_text(model_id, content, dimensions=dimensions)
+                
+                # Build system payload for text
+                system_payload = build_system_payload(model_id, content, "text", dimensions, is_query=False)
+                embedding = self.bedrock_service.embed_with_payload(model_id, system_payload)
                 raw_text = content
             elif extension in self.config.image_extensions:
                 content_type = ContentType.IMAGE
                 with open(file_path, 'rb') as f:
                     image_data = base64.b64encode(f.read()).decode('utf-8')
-                embedding = self.bedrock_service.embed_image(model_id, image_data, dimensions=dimensions)
+                
+                # Build system payload for image
+                system_payload = build_system_payload(model_id, image_data, "image", dimensions, is_query=False)
+                embedding = self.bedrock_service.embed_with_payload(model_id, system_payload)
                 raw_text = f"Image file: {file_path}"
             else:
                 print(f"Unsupported file type: {extension} for file {file_path}", flush=True)
@@ -852,6 +866,8 @@ class BatchProcessor:
         response = self.s3_client.get_object(**get_params)
         image_bytes = response['Body'].read()
         return base64.b64encode(image_bytes).decode('utf-8')
+    
+
     
     def _add_to_batch(self, vector_item: Dict[str, Any], vector_bucket: str, index_name: str):
         """Thread-safe method to add items to batch."""
