@@ -43,7 +43,7 @@ The query command now supports explicit input type parameters for better clarity
 
 #### Additional Prerequisites for TwelveLabs Models
 For TwelveLabs models (`twelvelabs.marengo-embed-2-7-v1:0`), you need:
-- An S3 URI for async processing results with the following bucket policy:
+- An S3 bucket for async processing results with the following bucket policy:
 
 ```json
 {
@@ -388,7 +388,7 @@ s3vectors-embed query \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 \
   --text-value "police sirens" \
   --async-output-s3-uri s3://my-async-bucket \
-  --filter '{"S3VECTORS-EMBED-INPUT-TYPE": "video"}' \
+  --filter '{"S3VECTORS-EMBED-MODALITY": "video"}' \
   --return-distance
 ```
 
@@ -460,7 +460,7 @@ Optional:
 - `--output`: Output format (json or table, default: json)
 
 **TwelveLabs-Specific Parameters:**
-- `--async-output-s3-uri`: S3 URI for async processing results (required for TwelveLabs models)
+- `--async-output-s3-uri`: S3 URI for async processing results (required for TwelveLabs models, e.g., s3://my-bucket/path)
 - `--src-bucket-owner`: AWS account ID for cross-account S3 access to input files (optional, only needed when input S3 files are in a different AWS account)
 
 **TwelveLabs Model Parameters (via `--bedrock-inference-params`):**
@@ -492,7 +492,7 @@ Use `--bedrock-inference-params '{"modelInput": {...}}'` for TwelveLabs-specific
 - `--audio`: Audio file path (local file or S3 URI) - TwelveLabs models only
 
 **TwelveLabs-Specific Parameters:**
-- `--async-output-s3-uri`: S3 URI for async output (required for TwelveLabs models)
+- `--async-output-s3-uri`: S3 URI for async output (required for TwelveLabs models, e.g., s3://my-bucket/path)
 - `--src-bucket-owner`: AWS account ID for cross-account S3 access to input files (optional, only needed when input S3 files are in a different AWS account)
 
 **TwelveLabs Model Parameters (via `--bedrock-inference-params`):**
@@ -547,7 +547,7 @@ s3vectors-embed query --vector-bucket-name my-bucket --index-name my-index \
 s3vectors-embed query --vector-bucket-name my-bucket --index-name my-index \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 --text-value "police sirens" \
   --async-output-s3-uri s3://my-async-bucket \
-  --filter '{"S3VECTORS-EMBED-INPUT-TYPE": "video"}' --return-distance
+  --filter '{"S3VECTORS-EMBED-MODALITY": "video"}' --return-distance
 
 # Backward compatibility (deprecated but working)
 s3vectors-embed query --vector-bucket-name my-bucket --index-name my-index \
@@ -662,11 +662,20 @@ TwelveLabs video processing generates multiple embeddings (one per clip) with te
 
 TwelveLabs processing automatically adds metadata fields:
 - `S3VECTORS-EMBED-SRC-LOCATION`: Original file location
-- `S3VECTORS-EMBED-INPUT-TYPE`: Input type (video, audio, text, image)
-- `S3VECTORS-EMBED-CLIP-INDEX`: Clip sequence number (for video)
+- `S3VECTORS-EMBED-MODALITY`: Input type (video, audio, text, image)
 - `S3VECTORS-EMBED-START-SEC`: Clip start time
 - `S3VECTORS-EMBED-END-SEC`: Clip end time
-- `S3VECTORS-EMBED-OPTION`: Embedding options used
+- `S3VECTORS-EMBED-TYPE`: Embedding options used
+
+### Processing Time
+
+TwelveLabs models use asynchronous processing:
+- **Text**: ~10-30 seconds
+- **Image**: ~30-60 seconds  
+- **Audio**: ~60-120 seconds
+- **Video**: ~60-300 seconds (depending on length and options)
+
+The CLI automatically waits for completion and retrieves results from S3.
 
 ### Best Practices
 
@@ -790,7 +799,7 @@ TwelveLabs queries enable powerful cross-modal search scenarios:
 s3vectors-embed query \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 \
   --text-value "high speed car chase through city streets" \
-  --filter '{"S3VECTORS-EMBED-INPUT-TYPE": "video"}'
+  --filter '{"S3VECTORS-EMBED-MODALITY": "video"}'
 ```
 
 #### **Video-to-Text Search**
@@ -800,7 +809,7 @@ s3vectors-embed query \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 \
   --video ./action-scene.mp4 \
   --embedding-options visual-text \
-  --filter '{"S3VECTORS-EMBED-INPUT-TYPE": "text"}'
+  --filter '{"S3VECTORS-EMBED-MODALITY": "text"}'
 ```
 
 #### **Audio-to-Video Search**
@@ -809,7 +818,7 @@ s3vectors-embed query \
 s3vectors-embed query \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 \
   --audio ./music-sample.wav \
-  --filter '{"S3VECTORS-EMBED-INPUT-TYPE": "video", "S3VECTORS-EMBED-OPTION": "audio"}'
+  --filter '{"S3VECTORS-EMBED-MODALITY": "video", "S3VECTORS-EMBED-TYPE": "audio"}'
 ```
 
 ### Important Considerations
@@ -910,14 +919,14 @@ s3vectors-embed query \
 s3vectors-embed put \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 \
   --text-value "Long text content..." \
-  --async-output-s3-uri my-bucket \
+  --async-output-s3-uri s3://my-bucket \
   --bedrock-inference-params '{"modelInput": {"textTruncate": "end"}}'
 
 # TwelveLabs - Video processing parameters
 s3vectors-embed put \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 \
   --video s3://bucket/video.mp4 \
-  --async-output-s3-uri my-bucket \
+  --async-output-s3-uri s3://my-bucket \
   --bedrock-inference-params '{"modelInput": {"startSec": 30.0, "useFixedLengthSec": 10, "embeddingOption": ["visual-text"]}}'
 ```
 
@@ -1471,34 +1480,17 @@ s3vectors-embed put \
 ```
 s3vectors-embed-cli/
 ├── s3vectors/                    # Main package directory
-│   ├── __init__.py              # Package initialization
-│   ├── __version__.py           # Version information
-│   ├── cli.py                   # Main CLI entry point
-│   ├── commands/                # Command implementations
-│   │   ├── __init__.py         # Commands package init
-│   │   ├── embed_put.py        # Vector embedding and storage
-│   │   └── embed_query.py      # Vector similarity search
-│   ├── core/                   # Core functionality
-│   │   ├── __init__.py         # Core package init
-│   │   ├── batch_processor.py  # Batch processing implementation
+│   ├── cli.py                    # Main CLI entry point
+│   ├── commands/                 # Command implementations
+│   │   ├── embed_put.py         # Vector embedding and storage
+│   │   └── embed_query.py       # Vector similarity search
+│   ├── core/                    # Core functionality
+│   │   ├── batch_processor.py   # Batch processing implementation
 │   │   └── services.py         # Bedrock and S3Vector services
-│   └── utils/                  # Utility functions
-│       ├── __init__.py         # Utils package init
-│       ├── config.py           # AWS configuration management
-│       ├── bedrock_params.py   # Bedrock parameter handling and validation
-│       ├── boto_config.py      # Boto3 configuration utilities
-│       └── twelvelabs_helpers.py # TwelveLabs-specific utilities
+│   └── utils/                   # Utility functions
+│       └── config.py           # AWS configuration management
 ├── setup.py                    # Package installation configuration
 ├── pyproject.toml              # Modern Python packaging configuration
 ├── requirements.txt            # Python dependencies
-├── README.md                   # Comprehensive documentation
-├── CHANGELOG.md                # Version history and changes
 ├── LICENSE                     # Apache 2.0 license
-├── MANIFEST.in                 # Package manifest for distribution
-├── CODE_OF_CONDUCT.md          # Community guidelines
-├── CONTRIBUTING.md             # Contribution guidelines
-├── NOTICE                      # Legal notices
-├── .gitignore                  # Git ignore patterns
-├── validate_package.sh         # Package validation script
-└── build_package.sh            # Package build script
 ```

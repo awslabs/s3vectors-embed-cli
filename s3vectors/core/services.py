@@ -128,13 +128,7 @@ class BedrockService:
             output_s3_uri = payload["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"]
             
             # Wait for completion and retrieve results
-            results = self._wait_and_retrieve_twelvelabs_results(invocation_arn, output_s3_uri)
-            
-            # Add job ID to each result for tracking
-            for result in results:
-                result['jobId'] = invocation_arn
-            
-            return results
+            return self._wait_and_retrieve_twelvelabs_results(invocation_arn, output_s3_uri)
                 
         except ClientError as e:
             self._debug_log(f"Async embedding failed: {str(e)}")
@@ -185,11 +179,10 @@ class BedrockService:
             raise ValueError(f"Invalid S3 URI: {output_s3_uri}")
         
         path_part = output_s3_uri[5:]  # Remove 's3://'
-        if '/' in path_part:
-            bucket, prefix = path_part.split('/', 1)
-        else:
-            bucket = path_part
-            prefix = ""
+        if '/' not in path_part:
+            raise ValueError(f"Invalid S3 URI format: {output_s3_uri}")
+        
+        bucket, prefix = path_part.split('/', 1)
         
         self._debug_log(f"Retrieving TwelveLabs results from s3://{bucket}/{prefix}")
         

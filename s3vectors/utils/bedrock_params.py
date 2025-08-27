@@ -1,5 +1,6 @@
 """Common utilities for Bedrock parameter handling and payload building."""
 
+import uuid
 from typing import Dict, Any, Optional
 import click
 
@@ -183,12 +184,18 @@ def build_twelvelabs_system_payload(model_id, input_type, input_content, async_o
         # For media types, prepare media source
         model_input["mediaSource"] = prepare_media_source(input_content, src_bucket_owner, session)
     
+    # Generate unique output path using the provided S3 URI
+    job_id = str(uuid.uuid4())
+    # Ensure the S3 URI ends with a slash for proper path construction
+    base_uri = async_output_s3_uri.rstrip('/')
+    output_s3_uri = f"{base_uri}/twelvelabs-results/{job_id}/"
+    
     return {
         "modelId": model_id,
         "modelInput": model_input,
         "outputDataConfig": {
             "s3OutputDataConfig": {
-                "s3Uri": async_output_s3_uri.rstrip('/')
+                "s3Uri": output_s3_uri
             }
         }
     }

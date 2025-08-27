@@ -100,7 +100,7 @@ def _validate_twelvelabs_query_parameters(input_type, user_bedrock_params, async
     if not async_output_s3_uri:
         raise click.ClickException(
             "TwelveLabs queries require an S3 output URI for async processing. "
-            "Please provide --async-output-s3-uri parameter."
+            "Please provide --async-output-s3-uri parameter (e.g., s3://my-bucket/path)."
         )
     
     # Extract parameters from bedrock_inference_params
@@ -292,14 +292,11 @@ def _process_media_file_input(media_path, bedrock_service, model_id, media_type,
             
             # Use the first (and should be only) embedding
             query_embedding = results[0]['embedding']
-            job_id = results[0].get('jobId')
             
             if debug:
                 console.print(f"[dim]Generated embedding with {len(query_embedding)} dimensions[/dim]")
-                if job_id:
-                    console.print(f"[dim]Job ID: {job_id}[/dim]")
             
-            return query_embedding, media_type, job_id
+            return query_embedding, media_type
             
     except Exception as e:
         raise click.ClickException(f"Error processing {media_type} query: {str(e)}")
@@ -321,7 +318,7 @@ def _process_twelvelabs_text_query(query_input, bedrock_service, async_output_s3
     if not async_output_s3_uri:
         raise click.ClickException(
             "TwelveLabs queries require an S3 output URI for async processing. "
-            "Please provide an S3 URI using the --async-output-s3-uri parameter."
+            "Please provide an S3 URI using the --async-output-s3-uri parameter (e.g., s3://my-bucket/path)."
         )
     
     # Note: src_bucket_owner is optional - only required for cross-account S3 access
@@ -369,14 +366,11 @@ def _process_twelvelabs_text_query(query_input, bedrock_service, async_output_s3
                 raise click.ClickException("No embedding found in TwelveLabs response")
             
             query_embedding = first_result['embedding']
-            job_id = first_result.get('jobId')
             
             if debug:
                 console.print(f"[dim]Generated TwelveLabs text embedding with {len(query_embedding)} dimensions[/dim]")
-                if job_id:
-                    console.print(f"[dim]Job ID: {job_id}[/dim]")
             
-            return query_embedding, job_id
+            return query_embedding
             
     except Exception as e:
         raise click.ClickException(f"Failed to process TwelveLabs text query: {str(e)}")
@@ -440,7 +434,7 @@ def _process_standard_query(query_input, bedrock_service, model_id, dimensions, 
 @click.option('--return-distance', is_flag=True, help='Return similarity distances in results')
 @click.option('--return-metadata/--no-return-metadata', default=True, help='Return metadata in results (default: true)')
 @click.option('--src-bucket-owner', help='Source bucket owner AWS account ID for cross-account S3 access')
-@click.option('--async-output-s3-uri', help='S3 URI for async output (required for TwelveLabs models, e.g., s3://my-async-bucket)')
+@click.option('--async-output-s3-uri', help='S3 URI for async output (required for TwelveLabs models, e.g., s3://my-bucket/path)')
 @click.option('--bedrock-inference-params', help='JSON string with model-specific parameters matching Bedrock API format (e.g., \'{"normalize": false}\' for Titan or \'{"input_type": "search_query"}\' for Cohere)')
 @click.option('--output', type=click.Choice(['table', 'json']), default='json', help='Output format (default: json)')
 @click.option('--region', help='AWS region (overrides session/config defaults)')
@@ -484,8 +478,8 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
     • Single condition: --filter '{"category": {"$eq": "documentation"}}'
     • Multiple conditions (AND): --filter '{"$and": [{"category": "docs"}, {"version": "1.0"}]}'
     • Multiple conditions (OR): --filter '{"$or": [{"category": "docs"}, {"category": "guides"}]}'
-    • Filter by content type: --filter '{"S3VECTORS-EMBED-INPUT-TYPE": "video"}'
-    • Filter by embedding option: --filter '{"S3VECTORS-EMBED-OPTION": "visual-image"}'
+    • Filter by content type: --filter '{"S3VECTORS-EMBED-MODALITY": "video"}'
+    • Filter by embedding option: --filter '{"S3VECTORS-EMBED-TYPE": "visual-image"}'
     
     \b
     EXAMPLES:
@@ -535,7 +529,7 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
     s3vectors-embed query --vector-bucket-name my-bucket --index-name my-index \\
       --model-id twelvelabs.marengo-embed-2-7-v1:0 --text-value "police sirens" \\
       --async-output-s3-uri s3://my-async-bucket --src-bucket-owner 123456789012 \\
-      --filter '{"S3VECTORS-EMBED-INPUT-TYPE": "video"}' --return-distance
+      --filter '{"S3VECTORS-EMBED-MODALITY": "video"}' --return-distance
     
     \b
     BACKWARD COMPATIBILITY:
@@ -577,7 +571,7 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
             if not async_output_s3_uri:
                 raise click.ClickException(
                     "TwelveLabs models require --async-output-s3-uri parameter. "
-                    "Please provide an S3 URI for async processing results."
+                    "Please provide an S3 URI for async processing results (e.g., s3://my-bucket/path)."
                 )
             
             # Validate TwelveLabs-specific parameters for video/audio queries
@@ -589,7 +583,7 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
             # TwelveLabs model processing
             if input_type in ["text_value", "legacy"]:
                 # Text queries for TwelveLabs (existing implementation)
-                query_embedding, job_id = _process_twelvelabs_text_query(
+                query_embedding = _process_twelvelabs_text_query(
                     input_value, bedrock_service, async_output_s3_uri, src_bucket_owner, console, debug, model_id, session, user_bedrock_params
                 )
                 content_type = "text"
@@ -608,23 +602,23 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
                     except Exception as e:
                         raise click.ClickException(f"Error reading text file {input_value}: {str(e)}")
                 
-                query_embedding, job_id = _process_twelvelabs_text_query(
+                query_embedding = _process_twelvelabs_text_query(
                     text_content, bedrock_service, async_output_s3_uri, src_bucket_owner, console, debug, model_id, session, user_bedrock_params
                 )
                 content_type = "text"
             elif input_type == "video":
-                query_embedding, content_type, job_id = _process_video_file_input(
+                query_embedding, content_type = _process_video_file_input(
                     input_value, bedrock_service, model_id, async_output_s3_uri, 
                     src_bucket_owner, session, console, debug, user_bedrock_params
                 )
             elif input_type == "audio":
-                query_embedding, content_type, job_id = _process_audio_file_input(
+                query_embedding, content_type = _process_audio_file_input(
                     input_value, bedrock_service, model_id, async_output_s3_uri, 
                     src_bucket_owner, session, console, debug, user_bedrock_params
                 )
             elif input_type == "image":
                 # Use the same media processing approach as video/audio
-                query_embedding, content_type, job_id = _process_media_file_input(
+                query_embedding, content_type = _process_media_file_input(
                     input_value, bedrock_service, model_id, "image", async_output_s3_uri, 
                     src_bucket_owner, session, console, debug, user_bedrock_params
                 )
@@ -634,8 +628,7 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
                     f"Supported types: --text-value, --text, --image, --video, --audio"
                 )
         else:
-            # Standard model processing (no job ID for sync models)
-            job_id = None
+            # Standard model processing
             if input_type == "text_value":
                 query_embedding, content_type = _process_text_value_input(
                     input_value, bedrock_service, model_id, dimensions, user_bedrock_params
@@ -709,8 +702,6 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
             if is_twelvelabs_model:
                 summary["processingType"] = "async"
                 summary["crossModalSearch"] = True
-                if job_id:
-                    summary["jobId"] = job_id
             
             output_data = {
                 "results": json_results,

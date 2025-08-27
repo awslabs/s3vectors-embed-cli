@@ -44,12 +44,7 @@ def _handle_async_multi_results(results, vector_bucket_name, index_name, model_i
                                   clip_key, embedding, clip_metadata, f"Storing clip {i+1}/{len(results)}...")
         processed_keys.append(clip_key)
     
-    # Extract job ID from the first result if available
-    job_id = None
-    if results and len(results) > 0 and 'jobId' in results[0]:
-        job_id = results[0]['jobId']
-    
-    result_dict = {
+    return {
         'type': 'twelvelabs_multiclip',
         'bucket': vector_bucket_name,
         'index': index_name,
@@ -58,12 +53,6 @@ def _handle_async_multi_results(results, vector_bucket_name, index_name, model_i
         'totalVectors': len(processed_keys),
         'keys': processed_keys
     }
-    
-    # Add job ID if available
-    if job_id:
-        result_dict['jobId'] = job_id
-    
-    return result_dict
 
 
 def _process_video_input(video_path, vector_bucket_name, index_name, model_id,
@@ -103,14 +92,8 @@ def _process_video_input(video_path, vector_bucket_name, index_name, model_id,
             _store_vector_with_progress(progress, s3vector_service, vector_bucket_name, index_name, 
                                       vector_key, embedding, metadata_dict)
             
-            result_dict = _create_result_dict(vector_key, vector_bucket_name, index_name, model_id, 
+            return _create_result_dict(vector_key, vector_bucket_name, index_name, model_id, 
                                       'video', embedding, metadata_dict)
-            
-            # Add job ID for TwelveLabs results
-            if 'jobId' in results[0]:
-                result_dict['jobId'] = results[0]['jobId']
-            
-            return result_dict
         else:
             # Multiple results (clips)
             return _handle_async_multi_results(results, vector_bucket_name, index_name, model_id,
@@ -154,14 +137,8 @@ def _process_audio_input(audio_path, vector_bucket_name, index_name, model_id,
             _store_vector_with_progress(progress, s3vector_service, vector_bucket_name, index_name, 
                                       vector_key, embedding, metadata_dict)
             
-            result_dict = _create_result_dict(vector_key, vector_bucket_name, index_name, model_id, 
+            return _create_result_dict(vector_key, vector_bucket_name, index_name, model_id, 
                                       'audio', embedding, metadata_dict)
-            
-            # Add job ID for TwelveLabs results
-            if 'jobId' in results[0]:
-                result_dict['jobId'] = results[0]['jobId']
-            
-            return result_dict
         else:
             # Multiple results (clips)
             return _handle_async_multi_results(results, vector_bucket_name, index_name, model_id,
@@ -300,7 +277,7 @@ def _get_index_dimensions(s3vector_service, vector_bucket_name, index_name, cons
 @click.option('--image', help='Image file path (local file, S3 URI, or S3 wildcard pattern like s3://bucket/images/*.jpg)')
 @click.option('--video', help='Video file path (local file or S3 URI) for multimodal models')
 @click.option('--audio', help='Audio file path (local file or S3 URI) for multimodal models')
-@click.option('--async-output-s3-uri', help='S3 URI for async processing results (required for async models like TwelveLabs, e.g., s3://my-async-bucket)')
+@click.option('--async-output-s3-uri', help='S3 URI for async processing results (required for async models like TwelveLabs, e.g., s3://my-bucket/path)')
 @click.option('--bedrock-inference-params', help='JSON string with model-specific parameters matching Bedrock API format (e.g., \'{"normalize": false}\' for Titan or \'{"modelInput": {"startSec": 30.0}}\' for TwelveLabs)')
 @click.option('--key', help='Custom vector key (auto-generated UUID if not provided)')
 @click.option('--metadata', help='JSON metadata to attach to the vector (e.g., \'{"category": "docs", "version": "1.0"}\')')
@@ -403,7 +380,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
     if is_async_model and not async_output_s3_uri:
         raise click.ClickException(
             f"Async models like {model_id} require --async-output-s3-uri parameter. "
-            "Please provide an S3 URI for async processing results."
+            "Please provide an S3 URI for async processing results (e.g., s3://my-bucket/path)."
         )
     
     # Input validation
@@ -587,14 +564,8 @@ def _process_text_value(text_value, vector_bucket_name, index_name, model_id,
                 _store_vector_with_progress(progress, s3vector_service, vector_bucket_name, index_name, 
                                           vector_key, embedding, metadata_dict)
                 
-                result_dict = _create_result_dict(vector_key, vector_bucket_name, index_name, model_id, 
+                return _create_result_dict(vector_key, vector_bucket_name, index_name, model_id, 
                                           'text', embedding, metadata_dict)
-                
-                # Add job ID for TwelveLabs results
-                if 'jobId' in results[0]:
-                    result_dict['jobId'] = results[0]['jobId']
-                
-                return result_dict
             else:
                 # Multiple results - handle as batch
                 return _handle_async_multi_results(results, vector_bucket_name, index_name, model_id,

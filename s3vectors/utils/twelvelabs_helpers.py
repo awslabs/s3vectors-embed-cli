@@ -157,12 +157,8 @@ def create_twelvelabs_metadata(input_type: str, source_location: str,
     """
     metadata = {
         'S3VECTORS-EMBED-SRC-LOCATION': source_location,
-        'S3VECTORS-EMBED-INPUT-TYPE': input_type
+        'S3VECTORS-EMBED-MODALITY': input_type
     }
-    
-    # Add clip index for multi-clip responses
-    if clip_index > 0 or embedding_data.get('startSec') is not None:
-        metadata['S3VECTORS-EMBED-CLIP-INDEX'] = clip_index
     
     # Add temporal information if available
     if embedding_data.get('startSec') is not None:
@@ -170,8 +166,8 @@ def create_twelvelabs_metadata(input_type: str, source_location: str,
     if embedding_data.get('endSec') is not None:
         metadata['S3VECTORS-EMBED-END-SEC'] = embedding_data['endSec']
     
-    # Add embedding option if available
+    # Add embedding type if available
     if embedding_data.get('embeddingOption'):
-        metadata['S3VECTORS-EMBED-OPTION'] = embedding_data['embeddingOption']
+        metadata['S3VECTORS-EMBED-TYPE'] = embedding_data['embeddingOption']
     
     return metadata
