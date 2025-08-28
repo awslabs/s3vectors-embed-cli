@@ -109,7 +109,12 @@ class BedrockService:
             self._debug_log(f"Unexpected error in embed_with_payload: {str(e)}")
             raise
     
-    def embed_async_with_payload(self, payload: Dict[str, Any]) -> List[Dict]:
+    def _extract_job_id_from_arn(self, invocation_arn: str) -> str:
+        """Extract Bedrock job ID from invocation ARN."""
+        # ARN format: arn:aws:bedrock:region:account:async-invoke/job-id
+        return invocation_arn.split('/')[-1]
+
+    def embed_async_with_payload(self, payload: Dict[str, Any]) -> tuple[List[Dict], str]:
         """Handle async embedding with complete StartAsyncInvoke payload."""
         model_id = payload.get("modelId")
         if not self.is_async_model(model_id):
@@ -122,13 +127,23 @@ class BedrockService:
             response = self.bedrock_runtime.start_async_invoke(**payload)
             invocation_arn = response['invocationArn']
             
-            self._debug_log(f"Async job started: {invocation_arn}")
+            # Extract the Bedrock job ID
+            job_id = self._extract_job_id_from_arn(invocation_arn)
             
-            # Extract output S3 URI for result retrieval
-            output_s3_uri = payload["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"]
+            self._debug_log(f"Async job started: {invocation_arn}, Job ID: {job_id}")
+            
+            # Extract base S3 URI and construct the expected output path
+            base_s3_uri = payload["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"].rstrip('/')
+            # Bedrock will create the results at: base_uri/job_id/
+            output_s3_uri = f"{base_s3_uri}/{job_id}/"
+            
+            self._debug_log(f"Looking for results at: {output_s3_uri}")
             
             # Wait for completion and retrieve results
-            return self._wait_and_retrieve_twelvelabs_results(invocation_arn, output_s3_uri)
+            results = self._wait_and_retrieve_twelvelabs_results(invocation_arn, output_s3_uri)
+            
+            # Return results with job ID
+            return results, job_id
                 
         except ClientError as e:
             self._debug_log(f"Async embedding failed: {str(e)}")
