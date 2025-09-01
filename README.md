@@ -129,8 +129,8 @@ s3vectors-embed query \
   --vector-bucket-name my-bucket \
   --index-name my-index \
   --model-id amazon.titan-embed-text-v2:0 \
-  --query-input "s3://my-bucket/image.jpeg" \
-  --k 3 
+  --query-input "s3://my-bucket/query.txt" \
+  --k 3
 ```
 
 4. **Query with metadata filters:**
