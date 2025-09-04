@@ -10,6 +10,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from s3vectors.utils.boto_config import get_boto_config, get_user_agent
+from s3vectors.utils.models import get_model_info
 
 
 class BedrockService:
@@ -40,17 +41,15 @@ class BedrockService:
         if self.debug and self.console:
             self.console.print(f"[dim] {message}[/dim]")
     
-
-    
-
-    
     def is_async_model(self, model_id: str) -> bool:
         """Check if model requires async processing."""
-        return model_id.startswith('twelvelabs.')
+        model = get_model_info(model_id)
+        return model.is_async() if model else False
     
-    def embed_with_payload(self, model_id: str, payload: Dict[str, Any]) -> List[float]:
+    def embed_with_payload(self, model, payload: Dict[str, Any]) -> List[float]:
         """Embed using direct Bedrock API payload for sync models."""
         start_time = time.time()
+        model_id = model.model_id
         self._debug_log(f"Starting embedding with model: {model_id}")
         self._debug_log(f"Payload: {json.dumps(payload, indent=2)}")
         
@@ -71,30 +70,8 @@ class BedrockService:
             if self.debug and self.console:
                 self._debug_log(f"Response body keys: {list(response_body.keys())}")
             
-            # Extract embedding based on model type - get whatever the user requested
-            if model_id.startswith('amazon.titan-embed-text-v2'):
-                if 'embeddingsByType' in response_body:
-                    # Get the first available embedding type (whatever user requested)
-                    embeddings_by_type = response_body['embeddingsByType']
-                    embedding = list(embeddings_by_type.values())[0] if embeddings_by_type else []
-                else:
-                    embedding = response_body.get('embedding', [])
-                    
-            elif model_id.startswith('amazon.titan-embed-text-v1'):
-                embedding = response_body['embedding']
-                
-            elif model_id.startswith('amazon.titan-embed-image'):
-                embedding = response_body['embedding']
-                
-            elif model_id.startswith('cohere.embed'):
-                # Cohere returns embeddings as a direct array
-                embeddings = response_body.get('embeddings', [])
-                if embeddings and len(embeddings) > 0:
-                    embedding = embeddings[0]  # First text's embedding
-                else:
-                    embedding = []
-            else:
-                raise ValueError(f"Unsupported model for embed_with_payload: {model_id}")
+            # Extract embedding using schema-based approach
+            embedding = model.extract_embedding(response_body)
             
             self._debug_log(f"Generated embedding with {len(embedding)} dimensions")
             total_time = time.time() - start_time
@@ -114,17 +91,28 @@ class BedrockService:
         # ARN format: arn:aws:bedrock:region:account:async-invoke/job-id
         return invocation_arn.split('/')[-1]
 
-    def embed_async_with_payload(self, payload: Dict[str, Any]) -> tuple[List[Dict], str]:
-        """Handle async embedding with complete StartAsyncInvoke payload."""
-        model_id = payload.get("modelId")
+    def embed_async_with_payload(self, model_id: str, final_payload: Dict[str, Any], 
+                               async_output_s3_uri: str) -> tuple[List[Dict], str]:
+        """Handle async embedding with model_id, final payload, and output S3 URI."""
         if not self.is_async_model(model_id):
             raise ValueError(f"Model {model_id} is not an async model")
         
-        self._debug_log(f"Starting async embedding: {json.dumps(payload, indent=2)}")
+        # Construct complete payload for start_async_invoke
+        complete_payload = {
+            "modelId": model_id,
+            "modelInput": final_payload,
+            "outputDataConfig": {
+                "s3OutputDataConfig": {
+                    "s3Uri": async_output_s3_uri
+                }
+            }
+        }
+        
+        self._debug_log(f"Starting async embedding: {json.dumps(complete_payload, indent=2)}")
         
         try:
             # Start async job with complete payload
-            response = self.bedrock_runtime.start_async_invoke(**payload)
+            response = self.bedrock_runtime.start_async_invoke(**complete_payload)
             invocation_arn = response['invocationArn']
             
             # Extract the Bedrock job ID
@@ -133,7 +121,7 @@ class BedrockService:
             self._debug_log(f"Async job started: {invocation_arn}, Job ID: {job_id}")
             
             # Extract base S3 URI and construct the expected output path
-            base_s3_uri = payload["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"].rstrip('/')
+            base_s3_uri = async_output_s3_uri.rstrip('/')
             # Bedrock will create the results at: base_uri/job_id/
             output_s3_uri = f"{base_s3_uri}/{job_id}/"
             
@@ -148,13 +136,11 @@ class BedrockService:
         except ClientError as e:
             self._debug_log(f"Async embedding failed: {str(e)}")
             raise Exception(f"Async embedding failed: {e}")
-    
 
-    
     def _wait_and_retrieve_twelvelabs_results(self, invocation_arn: str, output_s3_uri: str) -> List[Dict]:
         """Wait for TwelveLabs job completion and retrieve results."""
         self._debug_log(f"Waiting for TwelveLabs job completion: {invocation_arn}")
-        
+
         # Poll job status
         poll_count = 0
         max_polls = 120  # 20 minutes max (120 * 10 seconds)
@@ -287,55 +273,6 @@ class S3VectorService:
         if self.debug and self.console:
             self.console.print(f"[dim] {message}[/dim]")
     
-    def put_vector(self, bucket_name: str, index_name: str, vector_id: str, 
-                   embedding: List[float], metadata: Dict[str, Any] = None) -> str:
-        """Put vector into S3 vector index using S3 Vectors API."""
-        start_time = time.time()
-        self._debug_log(f"Starting put_vector operation")
-        self._debug_log(f"Bucket: {bucket_name}, Index: {index_name}, Vector ID: {vector_id}")
-        self._debug_log(f"Embedding dimensions: {len(embedding)}")
-        if metadata:
-            self._debug_log(f"Metadata keys: {list(metadata.keys())}")
-        
-        try:
-            # Prepare vector data according to S3 Vectors API format
-            vector_data = {
-                "key": vector_id,
-                "data": {
-                    "float32": embedding  # S3 Vectors expects {"float32": [list of floats]}
-                }
-            }
-            
-            # Add metadata if provided
-            if metadata:
-                vector_data["metadata"] = metadata
-            
-            # Use S3 Vectors PutVectors API
-            params = {
-                "vectorBucketName": bucket_name,
-                "indexName": index_name,
-                "vectors": [vector_data]
-            }
-            
-            self._debug_log(f"Making S3 Vectors put_vectors API call")
-            if self.debug and self.console:
-                self._debug_log(f"API parameters: {json.dumps({k: v for k, v in params.items() if k != 'vectors'})}")
-            
-            response = self.s3vectors.put_vectors(**params)
-            
-            elapsed_time = time.time() - start_time
-            self._debug_log(f"S3 Vectors put_vectors completed in {elapsed_time:.2f} seconds")
-            self._debug_log(f"Vector stored successfully with ID: {vector_id}")
-            
-            return vector_id
-            
-        except ClientError as e:
-            self._debug_log(f"S3 Vectors ClientError: {str(e)}")
-            raise Exception(f"S3 Vectors put_vectors failed: {e}")
-        except Exception as e:
-            self._debug_log(f"Unexpected error in put_vector: {str(e)}")
-            raise
-
     def put_vectors_batch(self, bucket_name: str, index_name: str, 
                          vectors: List[Dict[str, Any]]) -> List[str]:
         """Put multiple vectors into S3 vector index using S3 Vectors batch API."""
