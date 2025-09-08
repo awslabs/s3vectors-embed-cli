@@ -97,12 +97,17 @@ class UnifiedProcessor:
                 
         elif processing_input.content_type == "image":
             if "file_path" in processing_input.data:
-                base64_image = self._read_image_as_base64(processing_input.data["file_path"])
+                file_path = processing_input.data["file_path"]
+                
+                # For async models (TwelveLabs), preserve file_path for media_source
+                content["file_path"] = file_path
+                
+                # For sync models, read and encode image
+                base64_image = self._read_image_as_base64(file_path)
                 
                 # Set both formats to support different models:
                 # - Titan expects: {content.image_base64} (just base64 string)
                 # - Cohere expects: {content.image} (data URI format)
-                file_path = processing_input.data["file_path"]
                 if file_path.lower().endswith(('.jpg', '.jpeg')):
                     mime_type = "image/jpeg"
                 elif file_path.lower().endswith('.png'):
