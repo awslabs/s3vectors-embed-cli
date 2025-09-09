@@ -23,11 +23,10 @@ class BatchResult:
 class StreamingBatchOrchestrator:
     """Efficient streaming batch processor that handles files in chunks without loading all paths into memory."""
     
-    CHUNK_SIZE = 500
-    
-    def __init__(self, unified_processor: UnifiedProcessor, max_workers: int = 4):
+    def __init__(self, unified_processor: UnifiedProcessor, max_workers: int = 4, batch_size: int = 500):
         self.unified_processor = unified_processor
         self.max_workers = max_workers
+        self.batch_size = batch_size
         self.batch_lock = threading.Lock()
         
     def process_streaming_batch(self, file_pattern: str, content_type: str, 
@@ -147,7 +146,7 @@ class StreamingBatchOrchestrator:
                     chunk.append(f"s3://{bucket}/{key}")
                     
                     # Yield chunk when it reaches target size
-                    if len(chunk) >= self.CHUNK_SIZE:
+                    if len(chunk) >= self.batch_size:
                         yield chunk
                         chunk = []
         
@@ -212,7 +211,7 @@ class StreamingBatchOrchestrator:
                     chunk.append(file_path)
                     
                     # Yield chunk when it reaches target size
-                    if len(chunk) >= self.CHUNK_SIZE:
+                    if len(chunk) >= self.batch_size:
                         yield chunk
                         chunk = []
         

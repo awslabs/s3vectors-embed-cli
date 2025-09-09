@@ -439,6 +439,8 @@ Optional:
 - `--metadata`: Additional metadata associated with the vector; provided as JSON string
 - `--bedrock-inference-params`: Model-specific parameters passed to Bedrock (JSON format, e.g., `'{"normalize": false}'`)
 - `--src-bucket-owner`: AWS account ID for cross-account S3 access to input files (optional, only needed when input S3 files are in a different AWS account)
+- `--max-workers`: Maximum parallel workers for batch processing (default: 4)
+- `--batch-size`: Number of vectors per S3 Vector put_vectors call (1-500, default: 500)
 - `--output`: Output format (json or table, default: json)
 
 **TwelveLabs-Specific Parameters:**
@@ -1323,6 +1325,16 @@ s3vectors-embed put \
   --model-id amazon.titan-embed-text-v2:0 \
   --text "~/data/**/*.md" \
   --max-workers 2
+
+# Process with custom batch size for S3 Vector API calls
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.titan-embed-text-v2:0 \
+  --text "./documents/*.txt" \
+  --max-workers 8 \
+  --batch-size 230 \
+  --metadata '{"batch_config": "custom_size"}'
 ```
 
 **S3 files batch processing:**

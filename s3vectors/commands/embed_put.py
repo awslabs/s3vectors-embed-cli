@@ -113,12 +113,13 @@ def _prepare_processing_input(text_value, text, image, video, audio, is_multimod
 @click.option('--metadata', help='Additional metadata (JSON)')
 @click.option('--src-bucket-owner', help='AWS account ID for cross-account S3 access')
 @click.option('--max-workers', type=int, default=4, help='Maximum parallel workers for batch processing')
+@click.option('--batch-size', type=click.IntRange(1, 500), default=500, help='Number of vectors per S3 Vector put_vectors call (1-500, default: 500)')
 @click.option('--output', type=click.Choice(['json', 'table']), default='json', help='Output format')
 @click.option('--region', help='AWS region')
 @click.pass_context
 def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, image,
                      video, audio, async_output_s3_uri, bedrock_inference_params,
-                     metadata, src_bucket_owner, max_workers, output, region):
+                     metadata, src_bucket_owner, max_workers, batch_size, output, region):
     """Unified embed and store vectors command."""
     
     console = ctx.obj['console']
@@ -200,7 +201,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
                 return _process_streaming_batch(
                     file_path, processing_input.content_type, vector_bucket_name, index_name,
                     model, metadata_dict, user_bedrock_params, async_output_s3_uri, 
-                    src_bucket_owner, processor, console, output, max_workers, index_dimensions
+                    src_bucket_owner, processor, console, output, max_workers, batch_size, index_dimensions
                 )
         
         with _create_progress_context(console) as progress:
@@ -252,13 +253,13 @@ if __name__ == '__main__':
 
 def _process_streaming_batch(file_path, content_type, vector_bucket_name, index_name,
                            model, metadata_dict, user_bedrock_params, async_output_s3_uri,
-                           src_bucket_owner, processor, console, output, max_workers, index_dimensions):
+                           src_bucket_owner, processor, console, output, max_workers, batch_size, index_dimensions):
     """Process wildcard pattern using efficient streaming batch orchestrator."""
 
     
     try:
         # Create streaming batch orchestrator
-        streaming_orchestrator = StreamingBatchOrchestrator(processor, max_workers)
+        streaming_orchestrator = StreamingBatchOrchestrator(processor, max_workers, batch_size)
         
         console.print(f"Starting streaming batch processing: {file_path}")
         
