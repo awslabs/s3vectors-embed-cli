@@ -143,7 +143,7 @@ class BedrockService:
 
         # Poll job status
         poll_count = 0
-        max_polls = 120  # 20 minutes max (120 * 10 seconds)
+        max_polls = 180  # 30 minutes max (180 * 10 seconds)
         
         while poll_count < max_polls:
             try:
@@ -168,7 +168,7 @@ class BedrockService:
                 raise Exception(f"Failed to check TwelveLabs job status: {e}")
         
         if poll_count >= max_polls:
-            raise Exception("TwelveLabs job timed out after 20 minutes")
+            raise Exception("TwelveLabs job timed out after 30 minutes")
         
         # Retrieve results from S3
         return self._get_twelvelabs_results_from_s3(output_s3_uri)
@@ -185,51 +185,26 @@ class BedrockService:
         
         bucket, prefix = path_part.split('/', 1)
         
-        self._debug_log(f"Retrieving TwelveLabs results from s3://{bucket}/{prefix}")
+        # TwelveLabs always outputs results to output.json
+        result_key = f"{prefix}/output.json" if not prefix.endswith('/') else f"{prefix}output.json"
+        
+        self._debug_log(f"Reading TwelveLabs results from s3://{bucket}/{result_key}")
         
         try:
-            # List objects in the output location
-            response = self.s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+            obj_response = self.s3_client.get_object(Bucket=bucket, Key=result_key)
+            result_data = json.loads(obj_response['Body'].read().decode('utf-8'))
             
-            if 'Contents' not in response:
-                raise Exception("No results found in S3 output location")
-            
-            # Debug: List all files found
-            all_files = [obj['Key'] for obj in response['Contents']]
-            self._debug_log(f"All files found in S3 output location: {all_files}")
-            
-            # Find the result file (usually ends with .json)
-            result_files = [obj['Key'] for obj in response['Contents'] if obj['Key'].endswith('.json')]
-            
-            if not result_files:
-                raise Exception("No JSON result files found in S3 output location")
-            
-            # Try to read all JSON files to find the one with embeddings
-            for result_key in result_files:
-                self._debug_log(f"Reading TwelveLabs results from s3://{bucket}/{result_key}")
-                
-                obj_response = self.s3_client.get_object(Bucket=bucket, Key=result_key)
-                result_data = json.loads(obj_response['Body'].read().decode('utf-8'))
-                
-                self._debug_log(f"Content of {result_key}: {json.dumps(result_data, indent=2)}")
-                
-                # Check if this file contains embeddings
-                if self._has_embeddings(result_data):
-                    # Handle TwelveLabs format with 'data' array
-                    if 'data' in result_data and isinstance(result_data['data'], list):
-                        return result_data['data']
-                    # Handle both single object and array responses
-                    elif isinstance(result_data, list):
-                        return result_data
-                    else:
-                        return [result_data]
-            
-            # If no file with embeddings found, raise error
-            raise Exception("No files with embeddings found in S3 output location")
+            # Handle TwelveLabs format with 'data' array
+            if 'data' in result_data and isinstance(result_data['data'], list):
+                return result_data['data']
+            elif isinstance(result_data, list):
+                return result_data
+            else:
+                return [result_data]
                 
         except ClientError as e:
             self._debug_log(f"Error retrieving results from S3: {str(e)}")
-            raise Exception(f"Failed to retrieve TwelveLabs results from S3: {e}")
+            raise Exception(f"Failed to retrieve TwelveLabs results from s3://{bucket}/{result_key}: {e}")
     
     def _has_embeddings(self, data):
         """Check if the data contains embeddings."""

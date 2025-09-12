@@ -4,23 +4,10 @@ import click
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from s3vectors.core.services import BedrockService, S3VectorService
-from s3vectors.core.unified_processor import UnifiedProcessor, ProcessingInput
+from s3vectors.core.unified_processor import UnifiedProcessor
 from s3vectors.utils.config import get_region, get_current_account_id
-from s3vectors.utils.models import get_model_info, validate_user_parameters
+from s3vectors.utils.models import get_model_info, validate_user_parameters, prepare_processing_input, determine_content_type
 from s3vectors.core.streaming_batch_orchestrator import StreamingBatchOrchestrator
-
-
-def determine_content_type_from_cli(text, image, video, audio, text_value) -> str:
-    """Determine content type from CLI parameters."""
-    if video:
-        return "video"
-    if audio:
-        return "audio"
-    if image:
-        return "image"
-    if text or text_value:
-        return "text"
-    raise ValueError("No input type specified")
 
 
 def _create_progress_context(console):
@@ -48,55 +35,6 @@ def _validate_inputs(text_value, text, image, video, audio, model):
         raise click.ClickException("Only one input type can be specified at a time, except for multimodal input with supported models (--text-value + --image)")
     
     return is_multimodal_input
-
-
-def _prepare_processing_input(text_value, text, image, video, audio, is_multimodal, metadata_dict) -> ProcessingInput:
-    """Prepare unified processing input."""
-    
-    if is_multimodal:
-        return ProcessingInput(
-            content_type="multimodal",
-            data={"multimodal": {"text": text_value, "image_path": image}},
-            source_location=f"multimodal:text+{image}",
-            metadata=metadata_dict
-        )
-    elif text_value:
-        return ProcessingInput(
-            content_type="text",
-            data={"text": text_value},
-            source_location="direct_text_input",
-            metadata=metadata_dict
-        )
-    elif text:
-        return ProcessingInput(
-            content_type="text",
-            data={"file_path": text},
-            source_location=text,
-            metadata=metadata_dict
-        )
-    elif image:
-        return ProcessingInput(
-            content_type="image",
-            data={"file_path": image},
-            source_location=image,
-            metadata=metadata_dict
-        )
-    elif video:
-        return ProcessingInput(
-            content_type="video",
-            data={"file_path": video},
-            source_location=video,
-            metadata=metadata_dict
-        )
-    elif audio:
-        return ProcessingInput(
-            content_type="audio",
-            data={"file_path": audio},
-            source_location=audio,
-            metadata=metadata_dict
-        )
-    else:
-        raise click.ClickException("No valid input provided")
 
 
 @click.command()
@@ -154,7 +92,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
     # Early validation of user parameters before any processing
     if user_bedrock_params:
         try:
-            content_type = determine_content_type_from_cli(text, image, video, audio, text_value)
+            content_type = determine_content_type(text_value, text, image, video, audio)
             system_keys = model.get_system_keys(content_type)
             system_payload = {key: None for key in system_keys}  # Dummy values for validation
             
@@ -190,7 +128,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
             raise click.ClickException(f"Failed to get index information: {str(e)}")
         
         # Prepare processing input
-        processing_input = _prepare_processing_input(
+        processing_input = prepare_processing_input(
             text_value, text, image, video, audio, is_multimodal, metadata_dict
         )
         
@@ -303,34 +241,6 @@ def _process_streaming_batch(file_path, content_type, vector_bucket_name, index_
     except Exception as e:
         console.print(f"[red]Streaming batch processing failed: {str(e)}[/red]")
         raise click.ClickException(f"Streaming batch processing failed: {str(e)}")
-
-
-
-            
-            # Create batch orchestrator with ThreadPoolExecutor
-#            batch_orchestrator = BatchOrchestrator(processor, max_workers)
-            
-            # Let BatchOrchestrator handle S3 streaming directly (it will show correct count)
-#            batch_result = batch_orchestrator.process_batch(
-#                [file_path], content_type, vector_bucket_name, index_name, model,
-#                metadata_dict, async_output_s3_uri, src_bucket_owner, user_bedrock_params
-#            )
-#        else:
-            # Use existing batch_utils for local files
-#            file_paths = expand_file_pattern(file_path, processor.session)
-            
-#            console.print(f"Found {len(file_paths)} files to process")
-            
-            # Create batch orchestrator with ThreadPoolExecutor
-#            batch_orchestrator = BatchOrchestrator(processor, max_workers)
-            
-#            console.print(f"Processing {len(file_paths)} files with {max_workers} parallel workers...")
-            
-            # Process batch using ThreadPoolExecutor
-#            batch_result = batch_orchestrator.process_batch(
-#                file_paths, content_type, vector_bucket_name, index_name, model,
-#                metadata_dict, async_output_s3_uri, src_bucket_owner, user_bedrock_params
-#            )
         
         # Prepare output in unified format
         result = {

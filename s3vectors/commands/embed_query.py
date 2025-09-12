@@ -5,24 +5,20 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from s3vectors.core.unified_processor import UnifiedProcessor, ProcessingInput
+from s3vectors.core.unified_processor import UnifiedProcessor
 from s3vectors.core.services import BedrockService, S3VectorService
 from s3vectors.utils.config import setup_aws_session, get_region, get_current_account_id
-from s3vectors.utils.models import get_model_info, validate_model_modality
+from s3vectors.utils.models import get_model_info, validate_model_modality, prepare_processing_input, determine_content_type
 
 
-def _validate_query_inputs(query_input, text_value, text, image, video, audio):
-    """Validate that exactly one query input is provided."""
+def _validate_query_inputs(query_input, text_value, text, image, video, audio, model):
+    """Validate query input parameters."""
     inputs = [query_input, text_value, text, image, video, audio]
     provided_inputs = [inp for inp in inputs if inp is not None]
     
     if len(provided_inputs) == 0:
         raise click.ClickException(
             "No query input provided. Use one of: --text-value, --text, --image, --video, or --audio"
-        )
-    elif len(provided_inputs) > 1:
-        raise click.ClickException(
-            "Multiple query inputs provided. Use only one of: --text-value, --text, --image, --video, or --audio"
         )
     
     # Handle deprecated --query-input parameter
@@ -31,37 +27,16 @@ def _validate_query_inputs(query_input, text_value, text, image, video, audio):
             "--query-input is deprecated and no longer supported. Use --text-value, --text, --image, --video, or --audio instead."
         )
     
-    # Determine content type and input
-    if text_value:
-        return "text", text_value
-    elif text:
-        return "text", text
-    elif image:
-        return "image", image
-    elif video:
-        return "video", video
-    elif audio:
-        return "audio", audio
-
-
-def _determine_processing_input(content_type: str, input_content: str) -> ProcessingInput:
-    """Create ProcessingInput for query processing."""
-    if content_type == "text" and not (input_content.startswith('s3://') or input_content.startswith('.') or input_content.startswith('/')):
-        # Direct text value
-        return ProcessingInput(
-            content_type="text",
-            data={"text": input_content},  # Use "text" key, not "text_value"
-            source_location=None,
-            metadata={}
+    # Special case: Allow multimodal input for supported models
+    is_multimodal_input = (model.supports_multimodal_input() and 
+                          text_value and image and not text and not video and not audio)
+    
+    if len(provided_inputs) > 1 and not is_multimodal_input:
+        raise click.ClickException(
+            "Multiple query inputs provided. Use only one input type, except for multimodal queries with supported models (--text-value + --image)"
         )
-    else:
-        # File path (local or S3)
-        return ProcessingInput(
-            content_type=content_type,
-            data={"file_path": input_content},
-            source_location=input_content,
-            metadata={}
-        )
+    
+    return is_multimodal_input
 
 
 def _format_query_results(results: Dict[str, Any], output_format: str, console: Console):
@@ -162,17 +137,23 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
     console = Console()
     
     try:
-        # Validate inputs
-        content_type, input_content = _validate_query_inputs(
-            query_input, text_value, text, image, video, audio
-        )
-        
-        # Get model information and validate modality
+        # Get model information first for validation
         model = get_model_info(model_id)
         if not model:
             raise click.ClickException(f"Unsupported model: {model_id}")
         
-        validate_model_modality(model_id, content_type)
+        # Validate inputs
+        is_multimodal = _validate_query_inputs(query_input, text_value, text, image, video, audio, model)
+        
+        # Determine content type for model validation
+        content_type = determine_content_type(text_value, text, image, video, audio, is_multimodal)
+        
+        # Validate model capabilities
+        if is_multimodal:
+            if not model.supports_multimodal_input():
+                raise click.ClickException(f"Model {model_id} does not support multimodal input (text + image)")
+        else:
+            validate_model_modality(model_id, content_type)
         
         # Parse user parameters
         user_bedrock_params = {}
@@ -214,19 +195,37 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
             raise click.ClickException(f"Failed to get index information: {str(e)}")
         
         # Create ProcessingInput
-        processing_input = _determine_processing_input(content_type, input_content)
+        processing_input = prepare_processing_input(text_value, text, image, video, audio, is_multimodal)
         
         # Process query input to generate embedding (same as PUT)
         with console.status("[bold green]Generating query embedding..."):
-            # Set default parameters for async models in query mode (video/audio only)
+            # Validate TwelveLabs query parameters for video/audio
             if model.is_async() and processing_input.content_type in ["video", "audio"]:
                 if not user_bedrock_params:
                     user_bedrock_params = {}
-                # Set TwelveLabs query defaults for consistent behavior
-                if "startSec" not in user_bedrock_params:
-                    user_bedrock_params["startSec"] = 0.0
+                
+                # Validate required parameters for video/audio queries
+                if "startSec" not in user_bedrock_params or "lengthSec" not in user_bedrock_params:
+                    raise click.ClickException('Both start time (startSec) and length (lengthSec) are required in --bedrock-inference-params for video/audio queries. Example: --bedrock-inference-params \'{"startSec": 30.0, "lengthSec": 6.0, "embeddingOption": ["visual-text"]}\'')
+                
+                # Validate embeddingOption for video queries (audio auto-selects)
+                if processing_input.content_type == "video" and "embeddingOption" not in user_bedrock_params:
+                    raise click.ClickException('embeddingOption is required for video queries. Specify exactly one: ["visual-text"], ["visual-image"], or ["audio"]. Example: --bedrock-inference-params \'{"startSec": 30.0, "lengthSec": 6.0, "embeddingOption": ["visual-text"]}\'')
+                
+                # Validate embeddingOption has exactly one value for video queries
+                if processing_input.content_type == "video" and "embeddingOption" in user_bedrock_params:
+                    embedding_options = user_bedrock_params["embeddingOption"]
+                    if not isinstance(embedding_options, list) or len(embedding_options) != 1:
+                        raise click.ClickException('embeddingOption must contain exactly one value for video queries. Example: --bedrock-inference-params \'{"embeddingOption": ["visual-text"]}\'')
+                
+                # Calculate useFixedLengthSec from lengthSec if not explicitly provided
                 if "useFixedLengthSec" not in user_bedrock_params:
-                    user_bedrock_params["useFixedLengthSec"] = 5.0
+                    user_bedrock_params["useFixedLengthSec"] = user_bedrock_params["lengthSec"]
+                
+                # Validate useFixedLengthSec range
+                use_fixed_length = user_bedrock_params.get("useFixedLengthSec")
+                if use_fixed_length is not None and (use_fixed_length < 2 or use_fixed_length > 10):
+                    raise click.ClickException(f"Length of the clip must be between 2-10 seconds, got: {use_fixed_length}")
             
             result = processor.process(
                 model=model,
@@ -238,6 +237,17 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
             )
         
         # Extract query embedding (TwelveLabs returns multiple, use first for query)
+        query_timing = {}  # Store timing info for summary
+        
+        # For TwelveLabs, capture timing info from raw result before vector processing
+        if model.is_async() and processing_input.content_type in ["video", "audio"] and hasattr(result, 'raw_results'):
+            if result.raw_results and len(result.raw_results) > 0:
+                first_raw = result.raw_results[0]
+                if "startSec" in first_raw:
+                    query_timing["queryStartSec"] = first_raw["startSec"]
+                if "endSec" in first_raw:
+                    query_timing["queryEndSec"] = first_raw["endSec"]
+        
         if hasattr(result, 'vectors') and result.vectors:
             # Get the embedding from the first vector
             first_vector = result.vectors[0]
@@ -277,7 +287,8 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
                 "model": model_id,
                 "index": index_name,
                 "resultsFound": len(search_results),
-                "queryDimensions": len(query_embedding)
+                "queryDimensions": len(query_embedding),
+                **query_timing  # Add timing info for TwelveLabs queries
             }
         }
         

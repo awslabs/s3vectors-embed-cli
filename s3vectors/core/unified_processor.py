@@ -5,17 +5,8 @@ import base64
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
-from s3vectors.utils.models import get_model_info, SupportedModel
+from s3vectors.utils.models import get_model_info, SupportedModel, ProcessingInput
 from s3vectors.utils.multimodal_helpers import create_multimodal_metadata
-
-
-@dataclass
-class ProcessingInput:
-    """Unified input structure for processing."""
-    content_type: str  # "text", "image", "video", "audio", "multimodal"
-    data: Dict[str, Any]  # Content data
-    source_location: str  # Original source location
-    metadata: Dict[str, Any]  # Base metadata
 
 
 @dataclass
@@ -24,6 +15,7 @@ class ProcessingResult:
     vectors: List[Dict[str, Any]]  # List of vectors to store
     result_type: str  # "single" or "multiclip"
     job_id: Optional[str] = None
+    raw_results: Optional[List[Dict[str, Any]]] = None  # Raw results for timing extraction
 
 
 class UnifiedProcessor:
@@ -79,7 +71,7 @@ class UnifiedProcessor:
         # Step 7: Determine result type
         result_type = "multiclip" if len(vectors) > 1 else "single"
         
-        return ProcessingResult(vectors=vectors, result_type=result_type, job_id=job_id)
+        return ProcessingResult(vectors=vectors, result_type=result_type, job_id=job_id, raw_results=raw_results)
     
     def _prepare_content(self, processing_input: ProcessingInput, index_dimensions: int) -> Dict[str, Any]:
         """Prepare content dictionary for schema application."""
@@ -121,6 +113,27 @@ class UnifiedProcessor:
                 content["image_base64"] = processing_input.data.get("image_base64", "")
                 content["image"] = processing_input.data.get("image", "")
                 
+        elif processing_input.content_type == "multimodal":
+            # Handle multimodal input (text + image)
+            multimodal_data = processing_input.data.get("multimodal", {})
+            content["text"] = multimodal_data.get("text", "")
+            
+            # Handle image path
+            image_path = multimodal_data.get("image_path", "")
+            if image_path:
+                base64_image = self._read_image_as_base64(image_path)
+                
+                # Determine MIME type
+                if image_path.lower().endswith(('.jpg', '.jpeg')):
+                    mime_type = "image/jpeg"
+                elif image_path.lower().endswith('.png'):
+                    mime_type = "image/png"
+                else:
+                    mime_type = "image/jpeg"  # default
+                
+                content["image_base64"] = base64_image  # For Titan
+                content["image"] = f"data:{mime_type};base64,{base64_image}"  # For Cohere
+            
         elif processing_input.content_type in ["video", "audio"]:
             content["file_path"] = processing_input.data.get("file_path", "")
             
@@ -224,6 +237,11 @@ class UnifiedProcessor:
                 if processing_input.content_type == "text" and "text" in processing_input.data:
                     vector_metadata["S3VECTORS-EMBED-SRC-CONTENT"] = processing_input.data["text"]
                 # For image/video/audio files, S3VECTORS-EMBED-SRC-CONTENT is not added (blank)
+            elif processing_input.content_type == "multimodal":
+                # Multimodal input (--text-value + --image) - add both content and location
+                multimodal_data = processing_input.data.get("multimodal", {})
+                vector_metadata["S3VECTORS-EMBED-SRC-CONTENT"] = multimodal_data.get("text", "")
+                vector_metadata["S3VECTORS-EMBED-SRC-LOCATION"] = processing_input.source_location
             else:
                 # Direct text input (--text-value) - only add content, no location
                 if processing_input.content_type == "text" and "text" in processing_input.data:
@@ -254,11 +272,5 @@ class UnifiedProcessor:
         if not vectors:
             return []
         
-        if len(vectors) == 1:
-            # Single vector - could use either method, but batch is consistent
-            self.s3vector_service.put_vectors_batch(vector_bucket_name, index_name, vectors)
-        else:
-            # Multiple vectors - use batch
-            self.s3vector_service.put_vectors_batch(vector_bucket_name, index_name, vectors)
-        
+        self.s3vector_service.put_vectors_batch(vector_bucket_name, index_name, vectors)
         return [v["key"] for v in vectors]

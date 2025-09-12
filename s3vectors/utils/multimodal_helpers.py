@@ -83,8 +83,7 @@ def create_multimodal_metadata(input_type: str, source_location: str,
         Metadata dictionary for multimodal content
     """
     metadata = {
-        'S3VECTORS-EMBED-SRC-LOCATION': source_location,
-        'S3VECTORS-EMBED-MODALITY': input_type
+        'S3VECTORS-EMBED-SRC-LOCATION': source_location
     }
     # Add temporal information if available
     if embedding_data.get('startSec') is not None:

@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - TwelveLabs Marengo Embed 2.7 model support for multimodal embeddings
-- Video query support with `--video` parameter and `--embedding-options`
+- Video query support with `--video` parameter
 - Audio query support with `--audio` parameter  
 - Image query support with `--image` parameter for TwelveLabs models
 - Cross-modal search capabilities (text-to-video, video-to-text, etc.)

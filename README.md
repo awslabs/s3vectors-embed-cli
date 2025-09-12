@@ -374,19 +374,7 @@ s3vectors-embed query \
   --k 10
 ```
 
-14. **Query filtering for video content only:**
-```bash
-s3vectors-embed query \
-  --vector-bucket-name my-bucket \
-  --index-name my-index \
-  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
-  --text-value "police sirens" \
-  --async-output-s3-uri s3://my-async-bucket \
-  --filter '{"S3VECTORS-EMBED-MODALITY": "video"}' \
-  --return-distance
-```
-
-15. **Query with custom model parameters:**
+14. **Query with custom model parameters:**
 ```bash
 s3vectors-embed query \
   --vector-bucket-name my-bucket \
@@ -429,10 +417,10 @@ Input Options (one required):
   - **S3 path with wildcard characters**: `s3://bucket/path/*` (prefix-based, not extension-based)
 - `--video`: Video input for TwelveLabs models - supports:
   - **Local file**: `./video.mp4` (up to 36MB for TwelveLabs models)
-  - **S3 URI**: `s3://bucket/path/video.mp4` (up to 2GB, requires `--src-bucket-owner`)
+  - **S3 URI**: `s3://bucket/path/video.mp4` 
 - `--audio`: Audio input for TwelveLabs models - supports:
   - **Local file**: `./audio.wav` (up to 36MB for TwelveLabs models)
-  - **S3 URI**: `s3://bucket/path/audio.wav` (up to 2GB, requires `--src-bucket-owner`)
+  - **S3 URI**: `s3://bucket/path/audio.wav`
 
 Optional:
 - `--key`: Uniquely identifies each vector in the vector index (default: auto-generated UUID)
@@ -445,7 +433,6 @@ Optional:
 
 **TwelveLabs-Specific Parameters:**
 - `--async-output-s3-uri`: S3 URI for async processing results (required for TwelveLabs models, e.g., s3://my-bucket/path)
-- `--src-bucket-owner`: AWS account ID for cross-account S3 access to input files (optional, only needed when input S3 files are in a different AWS account)
 
 **TwelveLabs Model Parameters (via `--bedrock-inference-params`):**
 Use `--bedrock-inference-params '{...}'` for TwelveLabs-specific options:
@@ -524,12 +511,6 @@ s3vectors-embed query --vector-bucket-name my-bucket --index-name my-index \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 --text-value "red sports car chase" \
   --async-output-s3-uri s3://my-async-bucket --k 5
 
-# Query with filtering for video content only
-s3vectors-embed query --vector-bucket-name my-bucket --index-name my-index \
-  --model-id twelvelabs.marengo-embed-2-7-v1:0 --text-value "police sirens" \
-  --async-output-s3-uri s3://my-async-bucket \
-  --filter '{"S3VECTORS-EMBED-MODALITY": "video"}' --return-distance
-
 ```
 
 ### Model Compatibility
@@ -578,8 +559,6 @@ s3vectors-embed put \
   --async-output-s3-uri s3://my-async-bucket \
   --src-bucket-owner 123456789012
 ```
-
-**Note**: When using S3 URIs, the `--src-bucket-owner` parameter is required and must contain your AWS account ID.
 
 ### Video Processing Options
 
@@ -641,7 +620,6 @@ TwelveLabs video processing generates multiple embeddings (one per clip) with te
 
 TwelveLabs processing automatically adds metadata fields:
 - `S3VECTORS-EMBED-SRC-LOCATION`: Original file location
-- `S3VECTORS-EMBED-MODALITY`: Input type (video, audio, text, image)
 - `S3VECTORS-EMBED-START-SEC`: Clip start time
 - `S3VECTORS-EMBED-END-SEC`: Clip end time
 - `S3VECTORS-EMBED-TYPE`: Embedding options used
@@ -696,10 +674,11 @@ s3vectors-embed query \
 | Aspect | Query Operations | PUT Operations |
 |--------|------------------|----------------|
 | **Embedding Count** | Always 1 embedding | 1 or multiple embeddings |
-| **Time Processing** | Fixed window (`useFixedLengthSec`) | Full duration or specified range |
+| **Time Processing** | Required time window (`startSec` + `lengthSec`) | Full duration or specified range |
 | **Purpose** | Generate query vector for search | Store vectors in index |
 | **Video Segmentation** | No segmentation (single clip) | Auto-segmentation for long videos |
-| **Parameters** | `startSec`, `useFixedLengthSec` | `startSec`, `lengthSec`, `useFixedLengthSec`, `minClipSec` |
+| **Parameters** | `startSec`, `lengthSec`, `embeddingOption` (all required for video) | `startSec`, `lengthSec`, `useFixedLengthSec`, `minClipSec` |
+| **Timing Info** | Shows `queryStartSec`, `queryEndSec` in summary | Shows clip timing in metadata |
 
 ### Input Type Behavior
 
@@ -715,45 +694,40 @@ s3vectors-embed query \
 ```
 
 #### **Video Queries**
-- **Processing**: Fixed time window (default: 0-5 seconds)
+- **Processing**: Required time window (user must specify `startSec` and `lengthSec`)
 - **Output**: 1 embedding
 - **Duration**: ~60-120 seconds
-- **Required**: `embeddingOption` parameter via `--bedrock-inference-params`
+- **Required**: `embeddingOption` (exactly one), `startSec`, and `lengthSec` parameters
 
 ```bash
-# Default: processes first 5 seconds
+# Process 5-second clip starting at 10 seconds
 s3vectors-embed query \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 \
   --video ./query-video.mp4 \
   --async-output-s3-uri s3://my-async-bucket \
-  --bedrock-inference-params '{"embeddingOption": ["visual-text"]}'
+  --bedrock-inference-params '{"embeddingOption": ["visual-text"], "startSec": 10.0, "lengthSec": 5.0}'
 
-# Custom: processes seconds 15-20
+# Process 3-second audio clip starting at 15 seconds
 s3vectors-embed query \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 \
   --video ./query-video.mp4 \
   --async-output-s3-uri s3://my-async-bucket \
-  --bedrock-inference-params '{"embeddingOption": ["audio"], "startSec": 15.0, "useFixedLengthSec": 5.0}'
+  --bedrock-inference-params '{"embeddingOption": ["audio"], "startSec": 15.0, "lengthSec": 3.0}'
 ```
 
 #### **Audio Queries**
-- **Processing**: Fixed time window (default: 0-5 seconds)
+- **Processing**: Required time window (user must specify `startSec` and `lengthSec`)
 - **Output**: 1 embedding
 - **Duration**: ~60-120 seconds
 - **Auto-selected**: `audio` embedding option
 
 ```bash
-# Default: processes first 5 seconds
-s3vectors-embed query \
-  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
-  --audio ./query-audio.wav
-
-# Custom: processes seconds 10-15
+# Process 4-second audio clip starting at 20 seconds
 s3vectors-embed query \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 \
   --audio ./query-audio.wav \
-  --start-sec 10.0 \
-  --use-fixed-length-sec 5.0
+  --async-output-s3-uri s3://my-async-bucket \
+  --bedrock-inference-params '{"startSec": 20.0, "lengthSec": 4.0}'
 ```
 
 #### **Image Queries**
@@ -764,8 +738,30 @@ s3vectors-embed query \
 ```bash
 s3vectors-embed query \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 \
-  --image ./query-image.jpg
+  --image ./query-image.jpg \
+  --async-output-s3-uri s3://my-async-bucket
 ```
+
+### Query Timing Information
+
+TwelveLabs video and audio queries now display timing information in the query summary:
+
+```json
+{
+  "results": [...],
+  "summary": {
+    "queryType": "video",
+    "model": "twelvelabs.marengo-embed-2-7-v1:0",
+    "index": "my-index",
+    "resultsFound": 5,
+    "queryDimensions": 1024,
+    "queryStartSec": 10.0,
+    "queryEndSec": 15.0
+  }
+}
+```
+
+This shows users exactly what time window (10.0 to 15.0 seconds) was processed to generate the query embedding.
 
 ### Cross-Modal Search Capabilities
 
@@ -777,7 +773,7 @@ TwelveLabs queries enable powerful cross-modal search scenarios:
 s3vectors-embed query \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 \
   --text-value "high speed car chase through city streets" \
-  --filter '{"S3VECTORS-EMBED-MODALITY": "video"}'
+  --async-output-s3-uri s3://my-async-bucket
 ```
 
 #### **Video-to-Text Search**
@@ -787,17 +783,7 @@ s3vectors-embed query \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 \
   --video ./action-scene.mp4 \
   --async-output-s3-uri s3://my-async-bucket \
-  --bedrock-inference-params '{"embeddingOption": ["visual-text"]}' \
-  --filter '{"S3VECTORS-EMBED-MODALITY": "text"}'
-```
-
-#### **Audio-to-Video Search**
-```bash
-# Find videos with similar audio content
-s3vectors-embed query \
-  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
-  --audio ./music-sample.wav \
-  --filter '{"S3VECTORS-EMBED-MODALITY": "video", "S3VECTORS-EMBED-TYPE": "audio"}'
+  --bedrock-inference-params '{"embeddingOption": ["visual-text"], "startSec": 5.0, "lengthSec": 3.0}'
 ```
 
 ### Important Considerations
@@ -824,12 +810,12 @@ s3vectors-embed query \
 
 ### Query Result Processing
 
-All TwelveLabs queries return a single embedding that can be used directly for similarity search:
+Query command for TwelveLabs Marengo Embed 2.7 model generates a single embedding internally and returns similarity search results:
 
 ```python
 # Internal processing (for reference)
-query_embedding = results[0]['embedding']  # Always single embedding
-# Used for similarity search against stored vectors
+query_embedding = generate_single_embedding(query_input)  # Always single embedding
+search_results = similarity_search(query_embedding, stored_vectors)  # Returns matching vectors
 ```
 
 This single embedding approach ensures:
@@ -933,9 +919,9 @@ s3vectors-embed put \
 
 | Model | Valid Parameters | Example Values |
 |-------|------------------|----------------|
-| **Titan Text v2** | `normalize`, `dimensions` | `false`, `512` |
+| **Titan Text v2** | `normalize` | `false`|
 | **Titan Text v1** | None (basic model) | N/A |
-| **Titan Image v1** | `normalize`, `dimensions` | `false`, `384` |
+| **Titan Image v1** | `normalize` | `false`|
 | **Cohere English/Multilingual** | `truncate` | `"END"`, `"NONE"` |
 | **TwelveLabs Marengo** | `textTruncate`, `startSec`, `lengthSec`, `useFixedLengthSec`, `embeddingOption`, `minClipSec` | `"end"`, `30.0`, `60.0`, `5`, `["visual-text"]`, `2` |
 

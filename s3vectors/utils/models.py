@@ -3,7 +3,82 @@
 from enum import Enum
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
+import click
 from s3vectors.utils.multimodal_helpers import build_media_source
+
+
+@dataclass
+class ProcessingInput:
+    """Unified input structure for processing."""
+    content_type: str  # "text", "image", "video", "audio", "multimodal"
+    data: Dict[str, Any]  # Content data
+    source_location: str  # Original source location
+    metadata: Dict[str, Any]  # Base metadata
+
+
+def determine_content_type(text_value, text, image, video, audio, is_multimodal=False) -> str:
+    """Determine content type from CLI parameters."""
+    if is_multimodal:
+        return "multimodal"
+    if video:
+        return "video"
+    if audio:
+        return "audio"
+    if image:
+        return "image"
+    if text or text_value:
+        return "text"
+    raise ValueError("No input type specified")
+
+
+def prepare_processing_input(text_value, text, image, video, audio, is_multimodal, metadata_dict=None) -> ProcessingInput:
+    """Prepare unified processing input for both PUT and QUERY operations."""
+    metadata = metadata_dict or {}
+    
+    if is_multimodal:
+        return ProcessingInput(
+            content_type="multimodal",
+            data={"multimodal": {"text": text_value, "image_path": image}},
+            source_location=image,  # Use image path as primary source location
+            metadata=metadata
+        )
+    elif text_value:
+        return ProcessingInput(
+            content_type="text",
+            data={"text": text_value},
+            source_location="direct_text_input",
+            metadata=metadata
+        )
+    elif text:
+        return ProcessingInput(
+            content_type="text",
+            data={"file_path": text},
+            source_location=text,
+            metadata=metadata
+        )
+    elif image:
+        return ProcessingInput(
+            content_type="image",
+            data={"file_path": image},
+            source_location=image,
+            metadata=metadata
+        )
+    elif video:
+        return ProcessingInput(
+            content_type="video",
+            data={"file_path": video},
+            source_location=video,
+            metadata=metadata
+        )
+    elif audio:
+        return ProcessingInput(
+            content_type="audio",
+            data={"file_path": audio},
+            source_location=audio,
+            metadata=metadata
+        )
+    else:
+        raise click.ClickException("No valid input provided")
 
 
 @dataclass
@@ -11,7 +86,6 @@ class ModelCapabilities:
     """Capabilities and properties of an embedding model."""
     is_async: bool
     supported_modalities: List[str]  # text, image, video, audio
-    dimensions: int
     description: str
     supports_multimodal_input: bool = False  # Can accept multiple modalities simultaneously
     max_local_file_size: int = None  # Maximum local file size in bytes for async models (None = no limit)
@@ -28,7 +102,6 @@ class SupportedModel(Enum):
     TITAN_TEXT_V1 = ("amazon.titan-embed-text-v1", ModelCapabilities(
         is_async=False,
         supported_modalities=["text"],
-        dimensions=1536,
         description="Amazon Titan Text Embeddings v1",
         payload_schema={"inputText": "{content.text}"},
         response_embedding_path="embedding"
@@ -37,7 +110,6 @@ class SupportedModel(Enum):
     TITAN_TEXT_V2 = ("amazon.titan-embed-text-v2:0", ModelCapabilities(
         is_async=False,
         supported_modalities=["text"],
-        dimensions=1024,
         description="Amazon Titan Text Embeddings v2",
         payload_schema={
             "inputText": "{content.text}",
@@ -50,7 +122,6 @@ class SupportedModel(Enum):
     TITAN_IMAGE_V1 = ("amazon.titan-embed-image-v1", ModelCapabilities(
         is_async=False,
         supported_modalities=["text", "image"],
-        dimensions=1024,
         description="Amazon Titan Multimodal Embeddings v1",
         supports_multimodal_input=True,
         payload_schema={
@@ -59,6 +130,11 @@ class SupportedModel(Enum):
                 "embeddingConfig": {"outputEmbeddingLength": "{index.dimensions}"}
             },
             "image": {
+                "inputImage": "{content.image_base64}",
+                "embeddingConfig": {"outputEmbeddingLength": "{index.dimensions}"}
+            },
+            "multimodal": {
+                "inputText": "{content.text}",
                 "inputImage": "{content.image_base64}",
                 "embeddingConfig": {"outputEmbeddingLength": "{index.dimensions}"}
             }
@@ -71,7 +147,6 @@ class SupportedModel(Enum):
     COHERE_ENGLISH_V3 = ("cohere.embed-english-v3", ModelCapabilities(
         is_async=False,
         supported_modalities=["text", "image"],
-        dimensions=1024,
         description="Cohere Embed English v3",
         payload_schema={
             "text": {
@@ -89,7 +164,6 @@ class SupportedModel(Enum):
     COHERE_MULTILINGUAL_V3 = ("cohere.embed-multilingual-v3", ModelCapabilities(
         is_async=False,
         supported_modalities=["text", "image"],
-        dimensions=1024,
         description="Cohere Embed Multilingual v3",
         payload_schema={
             "text": {
@@ -108,7 +182,6 @@ class SupportedModel(Enum):
     TWELVELABS_MARENGO_V2_7 = ("twelvelabs.marengo-embed-2-7-v1:0", ModelCapabilities(
         is_async=True,
         supported_modalities=["text", "image", "video", "audio"],
-        dimensions=1024,
         description="TwelveLabs Marengo Embed 2.7 v1",
         max_local_file_size=36 * 1024 * 1024,  # 36MB limit for local files
         payload_schema={

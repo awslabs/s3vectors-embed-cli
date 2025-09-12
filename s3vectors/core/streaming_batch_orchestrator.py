@@ -41,8 +41,7 @@ class StreamingBatchOrchestrator:
         
         # Use pre-fetched index dimensions (no API call needed)
         if index_dimensions is None:
-            # Fallback to model default if not provided
-            index_dimensions = model.capabilities.dimensions
+            raise ValueError("Failed to fetch index dimensions from S3 Vector index. Cannot proceed without actual index dimensions.")
         
         batch_context = {
             'model': model,
