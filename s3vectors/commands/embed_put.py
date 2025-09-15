@@ -133,7 +133,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
         )
         
         # Check for wildcard patterns (streaming batch processing)
-        if processing_input.content_type in ["text", "image"] and "file_path" in processing_input.data:
+        if processing_input.content_type in ["text", "image", "video", "audio"] and "file_path" in processing_input.data:
             file_path = processing_input.data["file_path"]
             if '*' in file_path or '?' in file_path:
                 return _process_streaming_batch(
@@ -220,7 +220,7 @@ def _process_streaming_batch(file_path, content_type, vector_bucket_name, index_
                 "totalFiles": batch_result.processed_count + batch_result.failed_count,
                 "processedFiles": batch_result.processed_count,
                 "failedFiles": batch_result.failed_count,
-                "totalVectors": batch_result.processed_count,
+                "totalVectors": len(batch_result.processed_keys),  # Count actual vectors
                 "vectorKeys": batch_result.processed_keys[:10] if batch_result.processed_keys else []  # Show first 10
             }
             
