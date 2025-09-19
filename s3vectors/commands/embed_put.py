@@ -175,7 +175,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
         raise click.ClickException("At least one input must be provided: --text-value, --text, or --image")
     
     # Special case: Allow multimodal input (text-value + image) for Titan Image v1 model
-    is_multimodal_titan = (model_id.startswith('amazon.titan-embed-image') and 
+    is_multimodal_titan = (model_id.startswith('amazon.titan-embed-image') and
                           text_value and image and not text)
     
     if inputs_provided > 1 and not is_multimodal_titan:
@@ -274,10 +274,14 @@ def _process_multimodal_input(text_value, image_path, vector_bucket_name, index_
         progress.update(embed_task, description="Multimodal embedding generated ✓")
         
         # Prepare metadata - add both text and image info
-        metadata_dict.update({
-            'S3VECTORS-EMBED-SRC-CONTENT': text_value,
-            'S3VECTORS-EMBED-SRC-LOCATION': image_path
-        })
+
+        # 9/19 - ONLY update metadata if not already provided in request
+
+        if 'S3VECTORS-EMBED-SRC-CONTENT' not in metadata_dict:
+            metadata_dict.update({'S3VECTORS-EMBED-SRC-CONTENT': text_value})
+
+        if 'S3VECTORS-EMBED-SRC-LOCATION' not in metadata_dict:
+            metadata_dict.update({'S3VECTORS-EMBED-SRC-LOCATION': image_path})
         
         # Generate vector ID if not provided
         vector_key = _generate_vector_id_if_needed(key)
@@ -304,9 +308,12 @@ def _process_text_value(text_value, vector_bucket_name, index_name, model_id,
                                                     text_value, dimensions)
         
         # Prepare metadata - add standard fields for direct text
-        metadata_dict.update({
-            'S3VECTORS-EMBED-SRC-CONTENT': text_value
-        })
+
+        # 9/19 - ONLY update metadata if not already provided in request
+        if 'S3VECTORS-EMBED-SRC-CONTENT' not in metadata_dict:
+            metadata_dict.update({
+                'S3VECTORS-EMBED-SRC-CONTENT': text_value
+            })
         
         # Generate vector ID if not provided
         vector_key = _generate_vector_id_if_needed(key)
