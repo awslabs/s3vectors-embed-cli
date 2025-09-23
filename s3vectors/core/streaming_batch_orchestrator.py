@@ -48,7 +48,8 @@ class StreamingBatchOrchestrator:
             'index_dimensions': index_dimensions,
             'user_bedrock_params': user_bedrock_params or {},
             'async_output_s3_uri': async_output_s3_uri,
-            'src_bucket_owner': src_bucket_owner
+            'src_bucket_owner': src_bucket_owner,
+            'batch_size': self.batch_size
         }
         
         # Process using appropriate streaming method
@@ -357,13 +358,24 @@ class StreamingBatchOrchestrator:
                     result = future.result()
                     
                     if result and result.vectors:
-                        # Store vectors from this file immediately
+                        # Store vectors from this file, chunking if needed
                         try:
-                            self.unified_processor.s3vector_service.put_vectors_batch(
-                                vector_bucket_name, index_name, result.vectors
-                            )
-                            
                             file_vector_count = len(result.vectors)
+                            batch_size = batch_context['batch_size']
+                            
+                            if file_vector_count <= batch_size:
+                                # Small file - single API call
+                                self.unified_processor.s3vector_service.put_vectors_batch(
+                                    vector_bucket_name, index_name, result.vectors
+                                )
+                            else:
+                                # Large file - chunk into batch_size pieces
+                                for i in range(0, file_vector_count, batch_size):
+                                    chunk = result.vectors[i:i + batch_size]
+                                    self.unified_processor.s3vector_service.put_vectors_batch(
+                                        vector_bucket_name, index_name, chunk
+                                    )
+                            
                             processed_files_count += 1  # Count files, not vectors
                             processed_keys.extend([v.get("key", "") for v in result.vectors])
                             
