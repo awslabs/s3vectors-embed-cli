@@ -1375,23 +1375,6 @@ s3vectors-embed put \
   --max-workers 2
 ```
 
-### **Batch Processing Performance**
-
-**Concurrency Recommendations:**
-- **Text/Image**: 4-8 workers (sync processing)
-- **Video/Audio**: 2-3 workers (async processing, optimal for TwelveLabs API)
-- **Sequential**: 1 worker (for testing or API rate limiting)
-
-**Performance Results (4 video files):**
-- **1 worker**: 3m10s (sequential)
-- **2 workers**: 2m7s (26% faster)
-- **4 workers**: 1m29s (53% faster)
-
-**Large Scale Results (602 image files):**
-- **Processing**: Sync batch processing
-- **Success Rate**: 17% (102 successful, 500 failed)
-- **Common Failures**: Image size requirements (min 128x128), API throttling
-
 ### **Batch Processing Output**
 
 **Text/Image Batch Output (Sync):**
