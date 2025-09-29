@@ -1289,7 +1289,7 @@ The CLI supports efficient batch processing for multiple files using both local 
 - **Automatic batching**: Large datasets are automatically split into batches of 500 vectors
 - **Dual processing strategies**: 
   - **Sync models** (text/image): Parallel processing with batch storage
-  - **Async models** (video/audio): Parallel async processing with per-file storage
+  - **Async models** (text/image/video/audio): Parallel async processing with per-file storage
 - **Error resilience**: Individual file failures don't stop batch processing
 - **Performance optimization**: Efficient memory usage and API call batching
 - **User-controlled concurrency**: Configure parallel workers with `--max-workers`
@@ -1300,12 +1300,12 @@ The CLI automatically selects the optimal processing strategy based on content t
 
 | Content Type | Processing Mode | API Used | Batch Strategy | Output |
 |--------------|----------------|----------|----------------|---------|
-| **Text** | Sync | `InvokeModel` | Parallel batch storage | Single vector per file |
-| **Image** | Sync | `InvokeModel` | Parallel batch storage | Single vector per file |
+| **Text**  | Sync  | `InvokeModel` | Parallel batch storage | Single vector per file |
+| **Image** | Sync  | `InvokeModel` | Parallel batch storage | Single vector per file |
+| **Text**  | Async | `StartAsyncInvoke` | Parallel batch storage | Single vector per file |
+| **Image** | Async | `StartAsyncInvoke` | Parallel batch storage | Single vector per file |
 | **Video** | Async | `StartAsyncInvoke` | Per-file storage | Multiple vectors per file |
 | **Audio** | Async | `StartAsyncInvoke` | Per-file storage | Multiple vectors per file |
-
-**Note**: For TwelveLabs models, text and image use sync processing for optimal performance, while video and audio use async processing for temporal segmentation.
 
 ### Batch Processing Examples
 
