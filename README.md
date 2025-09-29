@@ -35,26 +35,6 @@ The query command now supports explicit input type parameters for better clarity
 - Access to an Amazon Bedrock embedding model
 - Create an Amazon S3 vector bucket and vector index to store your embeddings
 
-#### Additional Prerequisites for TwelveLabs Models
-For TwelveLabs models (`twelvelabs.marengo-embed-2-7-v1:0`), you need:
-- An S3 bucket for async processing results with the following bucket policy:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {"Service": "bedrock.amazonaws.com"},
-      "Action": ["s3:PutObject", "s3:GetObject"],
-      "Resource": "arn:aws:s3:::your-async-bucket/*"
-    }
-  ]
-}
-```
-
-**Note**: Replace `your-async-bucket` with your actual bucket name. This policy allows Amazon Bedrock to write async processing results to your bucket.
-
 ### Quick Install (Recommended)
 ```bash
 pip install s3vectors-embed-cli
