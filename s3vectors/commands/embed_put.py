@@ -133,7 +133,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
         )
         
         # Check for wildcard patterns (streaming batch processing)
-        if processing_input.content_type in ["text", "image"] and "file_path" in processing_input.data:
+        if processing_input.content_type in ["text", "image", "video", "audio"] and "file_path" in processing_input.data:
             file_path = processing_input.data["file_path"]
             if '*' in file_path or '?' in file_path:
                 return _process_streaming_batch(
@@ -150,9 +150,20 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
                 async_output_s3_uri, src_bucket_owner, vector_bucket_name, index_name, index_dimensions
             )
             
-            # Store vectors
+            # Store vectors with batch_size handling
             progress.add_task(f"Storing {len(result.vectors)} vector(s)...", total=None)
-            stored_keys = processor.store_vectors(result.vectors, vector_bucket_name, index_name)
+            
+            # Handle batch_size for single file processing too
+            vector_count = len(result.vectors)
+            
+            if vector_count <= batch_size:
+                stored_keys = processor.store_vectors(result.vectors, vector_bucket_name, index_name)
+            else:
+                stored_keys = []
+                for i in range(0, vector_count, batch_size):
+                    chunk = result.vectors[i:i + batch_size]
+                    chunk_keys = processor.store_vectors(chunk, vector_bucket_name, index_name)
+                    stored_keys.extend(chunk_keys)
         
         # Prepare output
         if result.result_type == "multiclip":
@@ -220,7 +231,7 @@ def _process_streaming_batch(file_path, content_type, vector_bucket_name, index_
                 "totalFiles": batch_result.processed_count + batch_result.failed_count,
                 "processedFiles": batch_result.processed_count,
                 "failedFiles": batch_result.failed_count,
-                "totalVectors": batch_result.processed_count,
+                "totalVectors": len(batch_result.processed_keys),  # Count actual vectors
                 "vectorKeys": batch_result.processed_keys[:10] if batch_result.processed_keys else []  # Show first 10
             }
             

@@ -1282,18 +1282,34 @@ s3vectors-embed put --vector-bucket-name bucket --index-name idx \
 
 ## Batch Processing
 
-The CLI supports efficient batch processing for multiple files using both local and S3 wildcard characters in the input path
+The CLI supports efficient batch processing for multiple files using both local and S3 wildcard characters in the input path. Video and audio batch processing is supported with parallel async processing.
 
 ### **Batch Processing Features**
 
 - **Automatic batching**: Large datasets are automatically split into batches of 500 vectors
-- **Parallel processing**: Configurable worker threads for concurrent file processing
+- **Dual processing strategies**: 
+  - **Sync models** (text/image): Parallel processing with batch storage
+  - **Async models** (video/audio): Parallel async processing with per-file storage
 - **Error resilience**: Individual file failures don't stop batch processing
 - **Performance optimization**: Efficient memory usage and API call batching
+- **User-controlled concurrency**: Configure parallel workers with `--max-workers`
+
+### **Processing Strategy by Content Type**
+
+The CLI automatically selects the optimal processing strategy based on content type:
+
+| Content Type | Processing Mode | API Used | Batch Strategy | Output |
+|--------------|----------------|----------|----------------|---------|
+| **Text** | Sync | `InvokeModel` | Parallel batch storage | Single vector per file |
+| **Image** | Sync | `InvokeModel` | Parallel batch storage | Single vector per file |
+| **Video** | Async | `StartAsyncInvoke` | Per-file storage | Multiple vectors per file |
+| **Audio** | Async | `StartAsyncInvoke` | Per-file storage | Multiple vectors per file |
+
+**Note**: For TwelveLabs models, text and image use sync processing for optimal performance, while video and audio use async processing for temporal segmentation.
 
 ### Batch Processing Examples
 
-**Local files batch processing (NEW):**
+**Text/Image Batch Processing:**
 ```bash
 # Process all local text files
 s3vectors-embed put \
@@ -1304,37 +1320,7 @@ s3vectors-embed put \
   --metadata '{"source": "local_batch", "category": "documents"}' \
   --max-workers 4
 
-# Process files from multiple directories
-s3vectors-embed put \
-  --vector-bucket-name my-bucket \
-  --index-name my-index \
-  --model-id amazon.titan-embed-text-v2:0 \
-  --text "~/data/**/*.md" \
-  --max-workers 2
-
-# Process with custom batch size for S3 Vector API calls
-s3vectors-embed put \
-  --vector-bucket-name my-bucket \
-  --index-name my-index \
-  --model-id amazon.titan-embed-text-v2:0 \
-  --text "./documents/*.txt" \
-  --max-workers 8 \
-  --batch-size 230 \
-  --metadata '{"batch_config": "custom_size"}'
-```
-
-**S3 files batch processing:**
-```bash
-# Text files batch processing
-s3vectors-embed put \
-  --vector-bucket-name my-bucket \
-  --index-name my-index \
-  --model-id amazon.titan-embed-text-v2:0 \
-  --text "s3://bucket/text/*" \
-  --metadata '{"category": "documents", "batch": "2024-01"}' \
-  --max-workers 4
-
-# Image files batch processing
+# S3 image files batch processing
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
   --index-name my-index \
@@ -1342,20 +1328,89 @@ s3vectors-embed put \
   --image "s3://bucket/images/*" \
   --metadata '{"category": "images", "source": "batch_upload"}' \
   --max-workers 2
+
+# TwelveLabs large image batch (sync processing)
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
+  --image "s3://bucket/animals/*" \
+  --async-output-s3-uri s3://my-async-bucket \
+  --metadata '{"batch": "animal_images"}' \
+  --max-workers 4
+```
+
+**Video/Audio Batch Processing:**
+```bash
+# Local video batch processing with optimal concurrency
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
+  --video "/path/to/videos/*" \
+  --async-output-s3-uri s3://my-async-bucket \
+  --bedrock-inference-params '{"embeddingOption": ["visual-text"], "startSec": 3, "useFixedLengthSec": 5}' \
+  --metadata '{"batch": "video_processing", "date": "2025-09-14"}' \
+  --max-workers 2
+
+# S3 video batch processing with high concurrency
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
+  --video "s3://bucket/videos/*" \
+  --async-output-s3-uri s3://my-async-bucket \
+  --bedrock-inference-params '{"embeddingOption": ["visual-image", "audio"], "startSec": 0, "useFixedLengthSec": 4}' \
+  --metadata '{"batch": "multimodal_processing"}' \
+  --max-workers 4
+
+# Audio batch processing
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
+  --audio "s3://bucket/audio/*" \
+  --async-output-s3-uri s3://my-async-bucket \
+  --bedrock-inference-params '{"startSec": 10, "useFixedLengthSec": 8}' \
+  --max-workers 2
 ```
 
 ### **Batch Processing Output**
 
+**Text/Image Batch Output (Sync):**
 ```bash
-# Example output for local wildcard processing
 Processing chunk 1...
 Found 94 supported files in chunk 1
-Batch stored successfully. Total processed: 94
+STORED BATCH: 94 vectors
+Completed chunk 1: 94 processed, 0 failed
 
-Batch processing completed!
-   Total files found: 94
-   Successfully processed: 94
-   Failed: 0
+{
+  "type": "streaming_batch",
+  "contentType": "text",
+  "totalFiles": 94,
+  "processedFiles": 94,
+  "failedFiles": 0,
+  "totalVectors": 94
+}
+```
+
+**Video/Audio Batch Output (Async):**
+```bash
+Processing 4 video files with 2 concurrent workers...
+[1/4] Stored 6 vectors from /path/video1.mp4
+[2/4] Stored 14 vectors from /path/video2.mp4
+[3/4] Stored 1 vectors from /path/video3.mp4
+[4/4] Stored 45 vectors from /path/video4.mp4
+Completed chunk 1: 4 processed, 0 failed
+
+{
+  "type": "streaming_batch",
+  "contentType": "video",
+  "totalFiles": 4,
+  "processedFiles": 4,
+  "failedFiles": 0,
+  "totalVectors": 66
+}
 ```
 
 ### Troubleshooting
