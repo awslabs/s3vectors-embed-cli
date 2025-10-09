@@ -3,12 +3,15 @@
 
 from setuptools import setup, find_packages
 
+# Import version from the package
+exec(open("s3vectors/__version__.py").read())
+
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
     name="s3vectors-embed-cli",
-    version="0.1.0",
+    version=__version__,
     author="Vaibhav Sabharwal",
     author_email="vsabhar@amazon.com",
     maintainer="Vaibhav Sabharwal",
@@ -32,7 +35,6 @@ setup(
         "License :: OSI Approved :: Apache Software License",
         "Operating System :: OS Independent",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
@@ -43,7 +45,7 @@ setup(
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
         "Environment :: Console",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.9",
     install_requires=[
         "boto3>=1.39.5",
         "botocore>=1.39.5",

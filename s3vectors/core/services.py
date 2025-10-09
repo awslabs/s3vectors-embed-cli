@@ -10,15 +10,22 @@ import boto3
 from botocore.exceptions import ClientError
 
 from s3vectors.utils.boto_config import get_boto_config, get_user_agent
+from s3vectors.utils.models import get_model_info
 
 
 class BedrockService:
     """Service for Bedrock embedding operations."""
     
     def __init__(self, session: boto3.Session, region: str, debug: bool = False, console=None):
-        # Create Bedrock client with user agent tracking
+        # Create Bedrock clients with user agent tracking
         self.bedrock_runtime = session.client(
             'bedrock-runtime', 
+            region_name=region,
+            config=get_boto_config()
+        )
+        # Create S3 client for TwelveLabs result retrieval
+        self.s3_client = session.client(
+            's3',
             region_name=region,
             config=get_boto_config()
         )
@@ -34,66 +41,20 @@ class BedrockService:
         if self.debug and self.console:
             self.console.print(f"[dim] {message}[/dim]")
     
-    def embed_text(self, model_id: str, text: str, dimensions: Optional[int] = None) -> List[float]:
-        """Embed text using Bedrock model with optional dimension specification."""
+    def is_async_model(self, model_id: str) -> bool:
+        """Check if model requires async processing."""
+        model = get_model_info(model_id)
+        return model.is_async() if model else False
+    
+    def embed_with_payload(self, model, payload: Dict[str, Any]) -> List[float]:
+        """Embed using direct Bedrock API payload for sync models."""
         start_time = time.time()
-        self._debug_log(f"Starting text embedding with model: {model_id}")
-        self._debug_log(f"Text length: {len(text)} characters")
-        if dimensions:
-            self._debug_log(f"Requested dimensions: {dimensions}")
+        model_id = model.model_id
+        self._debug_log(f"Starting embedding with model: {model_id}")
+        self._debug_log(f"Payload: {json.dumps(payload, indent=2)}")
         
         try:
-            if model_id.startswith('amazon.titan-embed-text-v2'):
-                # Titan Text v2 API specification
-                body_dict = {
-                    "inputText": text,  # Required
-                    "normalize": True,  # Optional, defaults to true
-                    "embeddingTypes": ["float"]  # Optional, defaults to float
-                }
-                if dimensions:
-                    # Optional: 1024 (default), 512, 256
-                    body_dict["dimensions"] = dimensions
-                body = json.dumps(body_dict)
-                
-            elif model_id.startswith('amazon.titan-embed-text-v1'):
-                # Titan Text v1 API specification - only inputText field available
-                body = json.dumps({
-                    "inputText": text  # Only available field
-                })
-                # Note: dimensions parameter is ignored for v1 as it's not supported
-                
-            elif model_id.startswith('amazon.titan-embed-image'):
-                # Titan Multimodal Embeddings G1 can handle text-only input
-                body_dict = {
-                    "inputText": text  # Required for text-only embedding
-                }
-                if dimensions:
-                    # Valid values: 256, 384, 1024 (default)
-                    if dimensions not in [256, 384, 1024]:
-                        raise ValueError(f"Invalid dimensions for Titan Image v1. Valid values: 256, 384, 1024. Got: {dimensions}")
-                    body_dict["embeddingConfig"] = {
-                        "outputEmbeddingLength": dimensions
-                    }
-                body = json.dumps(body_dict)
-                
-            elif model_id.startswith('cohere.embed'):
-                # Cohere models API specification
-                body_dict = {
-                    "texts": [text],  # Array of strings
-                    "input_type": "search_document",  # Default for document embedding
-                    "embedding_types": ["float"]  # Default to float embeddings
-                }
-                if dimensions:
-                    # Cohere supports different embedding types but dimensions are model-fixed
-                    # Keep float type for compatibility with S3 Vectors
-                    body_dict["embedding_types"] = ["float"]
-                body = json.dumps(body_dict)
-            else:
-                raise ValueError(f"Unsupported model: {model_id}")
-            
-            self._debug_log(f"Making Bedrock API call to model: {model_id}")
-            if self.debug and self.console:
-                self._debug_log(f"Request body: {body}")
+            body = json.dumps(payload)
             
             response = self.bedrock_runtime.invoke_model(
                 modelId=model_id,
@@ -109,33 +70,12 @@ class BedrockService:
             if self.debug and self.console:
                 self._debug_log(f"Response body keys: {list(response_body.keys())}")
             
-            if model_id.startswith('amazon.titan-embed-text-v2'):
-                # Handle embeddingsByType response structure
-                if 'embeddingsByType' in response_body:
-                    embedding = response_body['embeddingsByType'].get('float', [])
-                else:
-                    # Fallback to direct embedding field
-                    embedding = response_body.get('embedding', [])
-                    
-            elif model_id.startswith('amazon.titan-embed-text-v1'):
-                # v1 returns embedding directly
-                embedding = response_body['embedding']
-                
-            elif model_id.startswith('amazon.titan-embed-image'):
-                embedding = response_body['embedding']
-                
-            elif model_id.startswith('cohere.embed'):
-                # Cohere returns embeddings in structured format
-                embeddings = response_body.get('embeddings', {})
-                if 'float' in embeddings:
-                    embedding = embeddings['float'][0]  # First text's float embedding
-                else:
-                    # Fallback for other response formats
-                    embedding = response_body.get('embeddings', [])[0] if response_body.get('embeddings') else []
+            # Extract embedding using schema-based approach
+            embedding = model.extract_embedding(response_body)
             
             self._debug_log(f"Generated embedding with {len(embedding)} dimensions")
             total_time = time.time() - start_time
-            self._debug_log(f"Total embed_text operation completed in {total_time:.2f} seconds")
+            self._debug_log(f"Total embedding operation completed in {total_time:.2f} seconds")
             
             return embedding
             
@@ -143,88 +83,143 @@ class BedrockService:
             self._debug_log(f"Bedrock ClientError: {str(e)}")
             raise Exception(f"Bedrock embedding failed: {e}")
         except Exception as e:
-            self._debug_log(f"Unexpected error in embed_text: {str(e)}")
+            self._debug_log(f"Unexpected error in embed_with_payload: {str(e)}")
             raise
     
-    def embed_image(self, model_id: str, image_data: str, text_input: str = None, dimensions: Optional[int] = None) -> List[float]:
-        """Embed image using Bedrock model, with optional text for multimodal and dimension specification."""
-        try:
-            if model_id.startswith('amazon.titan-embed-image'):
-                # Titan Multimodal Embeddings G1 API specification
-                body_dict = {}
-                
-                # At least one of inputText or inputImage is required
-                if text_input:
-                    body_dict["inputText"] = text_input
-                if image_data:
-                    body_dict["inputImage"] = image_data
-                
-                if not text_input and not image_data:
-                    raise ValueError("At least one of text_input or image_data is required for Titan Image model")
-                
-                # Optional embeddingConfig with outputEmbeddingLength
-                if dimensions:
-                    # Valid values: 256, 384, 1024 (default)
-                    if dimensions not in [256, 384, 1024]:
-                        raise ValueError(f"Invalid dimensions for Titan Image v1. Valid values: 256, 384, 1024. Got: {dimensions}")
-                    body_dict["embeddingConfig"] = {
-                        "outputEmbeddingLength": dimensions
-                    }
-                # If no dimensions specified, model uses default (1024)
-                
-                body = json.dumps(body_dict)
-                
-            elif model_id.startswith('cohere.embed'):
-                # Cohere image embedding API specification
-                # Convert image data to proper data URI format
-                import base64
-                import mimetypes
-                
-                # Determine MIME type (assume JPEG if not determinable)
-                mime_type = "image/jpeg"  # Default
-                
-                # Create data URI format required by Cohere
-                if not image_data.startswith('data:'):
-                    # If it's raw base64, add the data URI prefix
-                    data_uri = f"data:{mime_type};base64,{image_data}"
-                else:
-                    # Already in data URI format
-                    data_uri = image_data
-                
-                body_dict = {
-                    "images": [data_uri],  # Array of data URIs
-                    "input_type": "image",  # Required for image input
-                    "embedding_types": ["float"]  # Default to float embeddings
+    def _extract_job_id_from_arn(self, invocation_arn: str) -> str:
+        """Extract Bedrock job ID from invocation ARN."""
+        # ARN format: arn:aws:bedrock:region:account:async-invoke/job-id
+        return invocation_arn.split('/')[-1]
+
+    def embed_async_with_payload(self, model_id: str, final_payload: Dict[str, Any], 
+                               async_output_s3_uri: str) -> tuple[List[Dict], str]:
+        """Handle async embedding with model_id, final payload, and output S3 URI."""
+        if not self.is_async_model(model_id):
+            raise ValueError(f"Model {model_id} is not an async model")
+        
+        # Construct complete payload for start_async_invoke
+        complete_payload = {
+            "modelId": model_id,
+            "modelInput": final_payload,
+            "outputDataConfig": {
+                "s3OutputDataConfig": {
+                    "s3Uri": async_output_s3_uri
                 }
-                if dimensions:
-                    # Keep float type for compatibility
-                    body_dict["embedding_types"] = ["float"]
-                body = json.dumps(body_dict)
-            else:
-                raise ValueError(f"Unsupported image model: {model_id}")
+            }
+        }
+        
+        self._debug_log(f"Starting async embedding: {json.dumps(complete_payload, indent=2)}")
+        
+        try:
+            # Start async job with complete payload
+            response = self.bedrock_runtime.start_async_invoke(**complete_payload)
+            invocation_arn = response['invocationArn']
             
-            response = self.bedrock_runtime.invoke_model(
-                modelId=model_id,
-                body=body,
-                contentType='application/json'
-            )
+            # Extract the Bedrock job ID
+            job_id = self._extract_job_id_from_arn(invocation_arn)
             
-            response_body = json.loads(response['body'].read())
+            self._debug_log(f"Async job started: {invocation_arn}, Job ID: {job_id}")
             
-            if model_id.startswith('amazon.titan-embed-image'):
-                # Titan Image returns embedding directly
-                return response_body['embedding']
-            elif model_id.startswith('cohere.embed'):
-                # Cohere returns embeddings in structured format
-                embeddings = response_body.get('embeddings', {})
-                if 'float' in embeddings:
-                    return embeddings['float'][0]  # First image's float embedding
-                else:
-                    # Fallback for other response formats
-                    return response_body.get('embeddings', [])[0] if response_body.get('embeddings') else []
+            # Extract base S3 URI and construct the expected output path
+            base_s3_uri = async_output_s3_uri.rstrip('/')
+            # Bedrock will create the results at: base_uri/job_id/
+            output_s3_uri = f"{base_s3_uri}/{job_id}/"
             
+            self._debug_log(f"Looking for results at: {output_s3_uri}")
+            
+            # Wait for completion and retrieve results
+            results = self._wait_and_retrieve_twelvelabs_results(invocation_arn, output_s3_uri)
+            
+            # Return results with job ID
+            return results, job_id
+                
         except ClientError as e:
-            raise Exception(f"Bedrock image embedding failed: {e}")
+            self._debug_log(f"Async embedding failed: {str(e)}")
+            raise Exception(f"Async embedding failed: {e}")
+
+    def _wait_and_retrieve_twelvelabs_results(self, invocation_arn: str, output_s3_uri: str) -> List[Dict]:
+        """Wait for TwelveLabs job completion and retrieve results."""
+        self._debug_log(f"Waiting for TwelveLabs job completion: {invocation_arn}")
+
+        # Poll job status
+        poll_count = 0
+        max_polls = 180  # 30 minutes max (180 * 10 seconds)
+        
+        while poll_count < max_polls:
+            try:
+                response = self.bedrock_runtime.get_async_invoke(invocationArn=invocation_arn)
+                status = response['status']
+                
+                self._debug_log(f"Job status: {status} (poll #{poll_count + 1})")
+                
+                if status == 'Completed':
+                    break
+                elif status == 'Failed':
+                    failure_message = response.get('failureMessage', 'Unknown error')
+                    raise Exception(f"TwelveLabs async embedding failed: {failure_message}")
+                elif status in ['InProgress', 'Submitted']:
+                    time.sleep(10)  # Wait 10 seconds before next poll
+                    poll_count += 1
+                else:
+                    raise Exception(f"Unexpected job status: {status}")
+                    
+            except ClientError as e:
+                self._debug_log(f"Error checking job status: {str(e)}")
+                raise Exception(f"Failed to check TwelveLabs job status: {e}")
+        
+        if poll_count >= max_polls:
+            raise Exception("TwelveLabs job timed out after 30 minutes")
+        
+        # Retrieve results from S3
+        return self._get_twelvelabs_results_from_s3(output_s3_uri)
+    
+    def _get_twelvelabs_results_from_s3(self, output_s3_uri: str) -> List[Dict]:
+        """Retrieve TwelveLabs results from S3 output location."""
+        # Parse S3 URI
+        if not output_s3_uri.startswith('s3://'):
+            raise ValueError(f"Invalid S3 URI: {output_s3_uri}")
+        
+        path_part = output_s3_uri[5:]  # Remove 's3://'
+        if '/' not in path_part:
+            raise ValueError(f"Invalid S3 URI format: {output_s3_uri}")
+        
+        bucket, prefix = path_part.split('/', 1)
+        
+        # TwelveLabs always outputs results to output.json
+        result_key = f"{prefix}/output.json" if not prefix.endswith('/') else f"{prefix}output.json"
+        
+        self._debug_log(f"Reading TwelveLabs results from s3://{bucket}/{result_key}")
+        
+        try:
+            obj_response = self.s3_client.get_object(Bucket=bucket, Key=result_key)
+            result_data = json.loads(obj_response['Body'].read().decode('utf-8'))
+            
+            # Handle TwelveLabs format with 'data' array
+            if 'data' in result_data and isinstance(result_data['data'], list):
+                return result_data['data']
+            elif isinstance(result_data, list):
+                return result_data
+            else:
+                return [result_data]
+                
+        except ClientError as e:
+            self._debug_log(f"Error retrieving results from S3: {str(e)}")
+            raise Exception(f"Failed to retrieve TwelveLabs results from s3://{bucket}/{result_key}: {e}")
+    
+    def _has_embeddings(self, data):
+        """Check if the data contains embeddings."""
+        if isinstance(data, dict):
+            # Check for common embedding keys
+            embedding_keys = ['embedding', 'embeddings', 'vector', 'vectors']
+            if any(key in data for key in embedding_keys):
+                return True
+            # Check for TwelveLabs format with 'data' array
+            if 'data' in data and isinstance(data['data'], list):
+                return any(self._has_embeddings(item) for item in data['data'])
+        elif isinstance(data, list):
+            # Check if any item in the list has embeddings
+            return any(self._has_embeddings(item) for item in data)
+        return False
 
 
 class S3VectorService:
@@ -253,55 +248,6 @@ class S3VectorService:
         if self.debug and self.console:
             self.console.print(f"[dim] {message}[/dim]")
     
-    def put_vector(self, bucket_name: str, index_name: str, vector_id: str, 
-                   embedding: List[float], metadata: Dict[str, Any] = None) -> str:
-        """Put vector into S3 vector index using S3 Vectors API."""
-        start_time = time.time()
-        self._debug_log(f"Starting put_vector operation")
-        self._debug_log(f"Bucket: {bucket_name}, Index: {index_name}, Vector ID: {vector_id}")
-        self._debug_log(f"Embedding dimensions: {len(embedding)}")
-        if metadata:
-            self._debug_log(f"Metadata keys: {list(metadata.keys())}")
-        
-        try:
-            # Prepare vector data according to S3 Vectors API format
-            vector_data = {
-                "key": vector_id,
-                "data": {
-                    "float32": embedding  # S3 Vectors expects {"float32": [list of floats]}
-                }
-            }
-            
-            # Add metadata if provided
-            if metadata:
-                vector_data["metadata"] = metadata
-            
-            # Use S3 Vectors PutVectors API
-            params = {
-                "vectorBucketName": bucket_name,
-                "indexName": index_name,
-                "vectors": [vector_data]
-            }
-            
-            self._debug_log(f"Making S3 Vectors put_vectors API call")
-            if self.debug and self.console:
-                self._debug_log(f"API parameters: {json.dumps({k: v for k, v in params.items() if k != 'vectors'})}")
-            
-            response = self.s3vectors.put_vectors(**params)
-            
-            elapsed_time = time.time() - start_time
-            self._debug_log(f"S3 Vectors put_vectors completed in {elapsed_time:.2f} seconds")
-            self._debug_log(f"Vector stored successfully with ID: {vector_id}")
-            
-            return vector_id
-            
-        except ClientError as e:
-            self._debug_log(f"S3 Vectors ClientError: {str(e)}")
-            raise Exception(f"S3 Vectors put_vectors failed: {e}")
-        except Exception as e:
-            self._debug_log(f"Unexpected error in put_vector: {str(e)}")
-            raise
-
     def put_vectors_batch(self, bucket_name: str, index_name: str, 
                          vectors: List[Dict[str, Any]]) -> List[str]:
         """Put multiple vectors into S3 vector index using S3 Vectors batch API."""

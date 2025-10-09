@@ -5,6 +5,18 @@ import boto3
 from botocore.exceptions import NoCredentialsError, ProfileNotFound
 import click
 
+def get_current_account_id(session=None) -> str:
+    """Get the current AWS account ID using STS."""
+    try:
+        if session:
+            sts = session.client('sts')
+        else:
+            sts = boto3.client('sts')
+        response = sts.get_caller_identity()
+        return response['Account']
+    except Exception as e:
+        raise click.ClickException(f"Failed to get AWS account ID: {str(e)}")
+
 def setup_aws_session(profile=None, region=None):
     """Set up AWS session with optional profile and region."""
     try:

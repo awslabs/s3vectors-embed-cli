@@ -1,543 +1,283 @@
-"""Embed and put vectors command with enhanced batch processing."""
-
 import os
 import json
-import uuid
-from typing import Optional
-
 import click
 from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.table import Table
 
 from s3vectors.core.services import BedrockService, S3VectorService
-from s3vectors.core.batch_processor import InputProcessor, BatchProcessor, BatchConfig
-from s3vectors.utils.config import get_region
+from s3vectors.core.unified_processor import UnifiedProcessor
+from s3vectors.utils.config import get_region, get_current_account_id
+from s3vectors.utils.models import get_model_info, validate_user_parameters, prepare_processing_input, determine_content_type
+from s3vectors.core.streaming_batch_orchestrator import StreamingBatchOrchestrator
 
 
 def _create_progress_context(console):
-    """Create a standardized progress context."""
+    """Create progress context for operations."""
     return Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
-        console=console
+        console=console,
+        transient=True
     )
 
 
-def _generate_vector_id_if_needed(key):
-    """Generate vector key if not provided."""
-    return key if key else str(uuid.uuid4())
-
-
-def _store_vector_with_progress(progress, s3vector_service, vector_bucket_name, index_name, 
-                               vector_key, embedding, metadata_dict, task_description="Storing vector..."):
-    """Store vector with progress tracking."""
-    result_vector_id = s3vector_service.put_vector(
-        bucket_name=vector_bucket_name,
-        index_name=index_name,
-        vector_id=vector_key,
-        embedding=embedding,
-        metadata=metadata_dict
-    )
-    return result_vector_id
-
-
-def _create_result_dict(vector_key, vector_bucket_name, index_name, model_id, 
-                       content_type, embedding, metadata_dict, result_type='single'):
-    """Create standardized result dictionary."""
-    return {
-        'type': result_type,
-        'key': vector_key,
-        'bucket': vector_bucket_name,
-        'index': index_name,
-        'model': model_id,
-        'contentType': content_type,
-        'embeddingDimensions': len(embedding),
-        'metadata': metadata_dict
-    }
-
-
-def _generate_embedding_with_progress(progress, bedrock_service, model_id, content, 
-                                    dimensions, is_image=False, task_description="Generating embedding..."):
-    """Generate embedding with progress tracking."""
-    if is_image:
-        embedding = bedrock_service.embed_image(model_id, content, dimensions=dimensions)
-    else:
-        embedding = bedrock_service.embed_text(model_id, content, dimensions=dimensions)
-    return embedding
-
-
-def _get_index_dimensions(s3vector_service, vector_bucket_name, index_name, console, debug=False):
-    """Get index dimensions from S3 Vectors API."""
-    if debug:
-        console.print(f"[dim] Retrieving index dimensions for {index_name}[/dim]")
+def _validate_inputs(text_value, text, image, video, audio, model):
+    """Validate input parameters."""
+    inputs_provided = sum(bool(x) for x in [text_value, text, image, video, audio])
     
-    try:
-        index_info = s3vector_service.get_index(vector_bucket_name, index_name)
-        
-        # Extract dimensions from index info - it's nested under 'index' key
-        index_data = index_info.get('index', {})
-        dimensions = index_data.get('dimension')  # Note: singular 'dimension'
-        if dimensions:
-            if debug:
-                console.print(f"[dim] Index dimensions: {dimensions}[/dim]")
-            return dimensions
-        else:
-            console.print("[red]Error: Could not retrieve index dimensions from the index metadata[/red]")
-            raise click.ClickException(f"Failed to get dimensions for index '{index_name}' in bucket '{vector_bucket_name}'. The index may be corrupted or have invalid metadata.")
-            
-    except Exception as e:
-        # Check if it's a NotFoundException (index doesn't exist)
-        error_str = str(e)
-        if "NotFoundException" in error_str or "could not be found" in error_str:
-            console.print(f"[red]Error: Vector index '{index_name}' not found in bucket '{vector_bucket_name}'[/red]")
-            raise click.ClickException(f"Vector index '{index_name}' does not exist in bucket '{vector_bucket_name}'. Please verify the index name and bucket name are correct, and that the index has been created.")
-        else:
-            console.print(f"[red]Error: Failed to access vector index ({str(e)})[/red]")
-            raise click.ClickException(f"Failed to access vector index '{index_name}' in bucket '{vector_bucket_name}': {str(e)}")
+    if inputs_provided == 0:
+        raise click.ClickException("At least one input must be provided: --text-value, --text, --image, --video, or --audio")
+    
+    # Special case: Allow multimodal input for supported models
+    is_multimodal_input = (model.supports_multimodal_input() and 
+                          text_value and image and not text and not video and not audio)
+    
+    if inputs_provided > 1 and not is_multimodal_input:
+        raise click.ClickException("Only one input type can be specified at a time, except for multimodal input with supported models (--text-value + --image)")
+    
+    return is_multimodal_input
 
 
 @click.command()
-@click.option('--vector-bucket-name', required=True, help='S3 bucket name for vector storage')
+@click.option('--vector-bucket-name', required=True, help='S3 vector bucket name')
 @click.option('--index-name', required=True, help='Vector index name')
-@click.option('--model-id', required=True, help='Bedrock embedding model ID (e.g., amazon.titan-embed-text-v2:0, amazon.titan-embed-image-v1, cohere.embed-english-v3)')
+@click.option('--model-id', required=True, help='Bedrock embedding model ID')
 @click.option('--text-value', help='Direct text input to embed')
-@click.option('--text', help='Text file path (local file, S3 URI, or S3 wildcard pattern like s3://bucket/folder/*.txt)')
-@click.option('--image', help='Image file path (local file, S3 URI, or S3 wildcard pattern like s3://bucket/images/*.jpg)')
-@click.option('--key', help='Custom vector key (auto-generated UUID if not provided)')
-@click.option('--metadata', help='JSON metadata to attach to the vector (e.g., \'{"category": "docs", "version": "1.0"}\')')
-@click.option('--src-bucket-owner', help='Source bucket owner AWS account ID for cross-account S3 access')
-@click.option('--use-object-key-name', is_flag=True, help='Use S3 object key as vector key for batch processing')
-@click.option('--max-workers', default=4, type=int, help='Maximum parallel workers for batch processing (default: 4)')
-@click.option('--output', type=click.Choice(['table', 'json']), default='json', help='Output format (default: json)')
-@click.option('--region', help='AWS region (overrides session/config defaults)')
+@click.option('--text', help='Text file path (local or S3 URI)')
+@click.option('--image', help='Image file path (local or S3 URI)')
+@click.option('--video', help='Video file path (local or S3 URI)')
+@click.option('--audio', help='Audio file path (local or S3 URI)')
+@click.option('--async-output-s3-uri', help='S3 URI for async processing results')
+@click.option('--bedrock-inference-params', help='Bedrock inference parameters (JSON)')
+@click.option('--metadata', help='Additional metadata (JSON)')
+@click.option('--src-bucket-owner', help='AWS account ID for cross-account S3 access')
+@click.option('--max-workers', type=int, default=4, help='Maximum parallel workers for batch processing')
+@click.option('--batch-size', type=click.IntRange(1, 500), default=500, help='Number of vectors per S3 Vector put_vectors call (1-500, default: 500)')
+@click.option('--output', type=click.Choice(['json', 'table']), default='json', help='Output format')
+@click.option('--region', help='AWS region')
 @click.pass_context
 def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, image,
-              key, metadata, src_bucket_owner, use_object_key_name,
-              max_workers, output, region):
-    """Embed text or image content and store as vectors in S3.
-    
-    \b
-    SUPPORTED INPUT TYPES:
-    • Direct text: --text-value "your text here"
-    • Local files: --text /path/to/file.txt or --image /path/to/image.jpg
-    • S3 files: --text s3://bucket/file.txt or --image s3://bucket/image.jpg
-    • S3 wildcards: --text "s3://bucket/folder/*.txt" or --image "s3://bucket/images/*.jpg"
-    • Multimodal: --text-value "description" --image /path/to/image.jpg (Titan Image v1 only)
-    
-    \b
-    SUPPORTED MODELS:
-    • amazon.titan-embed-text-v2:0 (1024, 512, 256 dimensions)
-    • amazon.titan-embed-text-v1 (1536 dimensions, fixed)
-    • amazon.titan-embed-image-v1 (1024, 384, 256 dimensions, supports text+image)
-    • cohere.embed-english-v3 (1024 dimensions, fixed)
-    • cohere.embed-multilingual-v3 (1024 dimensions, fixed)
-     
-    
-    \b
-    BATCH PROCESSING:
-    • Supports up to 500 vectors per batch
-    • Use wildcards for multiple files: s3://bucket/docs/*.txt
-    • Automatic batching for large datasets
-    • Parallel processing with --max-workers
-    
-    \b
-    EXAMPLES:
-    # Direct text embedding
-    s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \\
-      --model-id amazon.titan-embed-text-v2:0 --text-value "Hello world"
-    
-    # Local file with custom key
-    s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \\
-      --model-id amazon.titan-embed-text-v2:0 --text document.txt --key "doc-001"
-    
-    # S3 batch processing
-    s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \\
-      --model-id amazon.titan-embed-text-v2:0 --text "s3://source-bucket/docs/*.txt" \\
-      --metadata '{"category": "documentation"}' --max-workers 4
-    
-    # Multimodal embedding (Titan Image v1)
-    s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \\
-      --model-id amazon.titan-embed-image-v1 --text-value "A red car" --image car.jpg
-    
-    # Debug mode for troubleshooting
-    s3vectors-embed --debug put --vector-bucket-name my-bucket --index-name my-index \\
-      --model-id amazon.titan-embed-text-v2:0 --text-value "Debug test"
-    """
+                     video, audio, async_output_s3_uri, bedrock_inference_params,
+                     metadata, src_bucket_owner, max_workers, batch_size, output, region):
+    """Unified embed and store vectors command."""
     
     console = ctx.obj['console']
     session = ctx.obj['aws_session']
     debug = ctx.obj.get('debug', False)
     region = get_region(session, region)
     
-    # Validate input - at least one input must be provided
-    inputs_provided = sum(bool(x) for x in [text_value, text, image])
-    if inputs_provided == 0:
-        raise click.ClickException("At least one input must be provided: --text-value, --text, or --image")
+    # Auto-assign account ID if not provided
+    if not src_bucket_owner:
+        src_bucket_owner = get_current_account_id(session)
     
-    # Special case: Allow multimodal input (text-value + image) for Titan Image v1 model
-    is_multimodal_titan = (model_id.startswith('amazon.titan-embed-image') and 
-                          text_value and image and not text)
+    # Load model properties once at start
+    model = get_model_info(model_id)
+    if not model:
+        raise click.ClickException(f"Unsupported model: {model_id}")
     
-    if inputs_provided > 1 and not is_multimodal_titan:
-        raise click.ClickException("Only one input type can be specified at a time, except for multimodal input with Titan Image v1 (--text-value + --image)")
+    # Parse parameters
+    user_bedrock_params = {}
+    if bedrock_inference_params:
+        try:
+            user_bedrock_params = json.loads(bedrock_inference_params)
+        except json.JSONDecodeError:
+            raise click.ClickException("Invalid JSON in --bedrock-inference-params parameter")
     
-    if is_multimodal_titan:
-        console.print("[dim] Multimodal input detected: Using both text and image for Titan Image v1[/dim]")
+    metadata_dict = {}
+    if metadata:
+        try:
+            metadata_dict = json.loads(metadata)
+        except json.JSONDecodeError:
+            raise click.ClickException("Invalid JSON in --metadata parameter")
+    
+    # Early validation of user parameters before any processing
+    if user_bedrock_params:
+        try:
+            content_type = determine_content_type(text_value, text, image, video, audio)
+            system_keys = model.get_system_keys(content_type)
+            system_payload = {key: None for key in system_keys}  # Dummy values for validation
+            
+            # Validate using utility function
+            validate_user_parameters(system_payload, user_bedrock_params)
+        except ValueError as e:
+            raise click.ClickException(str(e))
+    
+    # Check async model requirements
+    if model.is_async() and not async_output_s3_uri:
+        raise click.ClickException(
+            f"Async models like {model.model_id} require --async-output-s3-uri parameter."
+        )
+    
+    # Validate inputs
+    is_multimodal = _validate_inputs(text_value, text, image, video, audio, model)
     
     try:
         # Initialize services
         bedrock_service = BedrockService(session, region, debug=debug, console=console)
         s3vector_service = S3VectorService(session, region, debug=debug, console=console)
-        s3_client = session.client('s3')
         
-        # Parse metadata
-        metadata_dict = {}
-        if metadata:
-            try:
-                metadata_dict = json.loads(metadata)
-            except json.JSONDecodeError:
-                raise click.ClickException("Invalid JSON in --metadata parameter")
+        # Create unified processor
+        processor = UnifiedProcessor(bedrock_service, s3vector_service, session)
         
-        # Determine input type and process accordingly
-        if is_multimodal_titan:
-            # Handle multimodal input (text + image) for Titan Image v1
-            result = _process_multimodal_input(
-                text_value, image, vector_bucket_name, index_name, model_id,
-                bedrock_service, s3vector_service, s3_client, metadata_dict, key, console
-            )
-        elif text_value:
-            result = _process_text_value(
-                text_value, vector_bucket_name, index_name, model_id,
-                bedrock_service, s3vector_service, metadata_dict, key, console
-            )
-        elif text:
-            result = _process_text_input(
-                text, vector_bucket_name, index_name, model_id,
-                bedrock_service, s3vector_service, s3_client, metadata_dict,
-                src_bucket_owner, use_object_key_name, max_workers,
-                key, console, region
-            )
-        elif image:
-            result = _process_image_input(
-                image, vector_bucket_name, index_name, model_id,
-                bedrock_service, s3vector_service, s3_client, metadata_dict,
-                src_bucket_owner, use_object_key_name, max_workers,
-                key, console, region
-            )
+        # Fetch index dimensions once at the top level
+        try:
+            index_info = s3vector_service.get_index(vector_bucket_name, index_name)
+            index_dimensions = index_info.get("index", {}).get("dimension")
+            if not index_dimensions:
+                raise click.ClickException(f"Could not determine dimensions for index {index_name}")
+        except Exception as e:
+            raise click.ClickException(f"Failed to get index information: {str(e)}")
         
-        # Display results
-        _display_results(result, output, console)
+        # Prepare processing input
+        processing_input = prepare_processing_input(
+            text_value, text, image, video, audio, is_multimodal, metadata_dict
+        )
+        
+        # Check for wildcard patterns (streaming batch processing)
+        if processing_input.content_type in ["text", "image"] and "file_path" in processing_input.data:
+            file_path = processing_input.data["file_path"]
+            if '*' in file_path or '?' in file_path:
+                return _process_streaming_batch(
+                    file_path, processing_input.content_type, vector_bucket_name, index_name,
+                    model, metadata_dict, user_bedrock_params, async_output_s3_uri, 
+                    src_bucket_owner, processor, console, output, max_workers, batch_size, index_dimensions
+                )
+        
+        with _create_progress_context(console) as progress:
+            # Process with unified pipeline
+            progress.add_task("Processing input...", total=None)
+            result = processor.process(
+                model, processing_input, user_bedrock_params, 
+                async_output_s3_uri, src_bucket_owner, vector_bucket_name, index_name, index_dimensions
+            )
+            
+            # Store vectors
+            progress.add_task(f"Storing {len(result.vectors)} vector(s)...", total=None)
+            stored_keys = processor.store_vectors(result.vectors, vector_bucket_name, index_name)
+        
+        # Prepare output
+        if result.result_type == "multiclip":
+            output_result = {
+                'type': 'multiclip',
+                'bucket': vector_bucket_name,
+                'index': index_name,
+                'model': model.model_id,
+                'contentType': processing_input.content_type,
+                'totalVectors': len(stored_keys),
+                'keys': stored_keys
+            }
+            if result.job_id:
+                output_result['jobId'] = result.job_id
+        else:
+            output_result = {
+                'key': stored_keys[0],
+                'bucket': vector_bucket_name,
+                'index': index_name,
+                'model': model.model_id,
+                'contentType': processing_input.content_type,
+                'embeddingDimensions': index_dimensions,
+                'metadata': result.vectors[0]['metadata']
+            }
+        
+        console.print_json(data=output_result)
         
     except Exception as e:
         console.print(f"[red]Error: {str(e)}[/red]")
         raise click.ClickException(str(e))
 
 
-def _process_multimodal_input(text_value, image_path, vector_bucket_name, index_name, model_id,
-                             bedrock_service, s3vector_service, s3_client, metadata_dict, key, console):
-    """Process multimodal input (text + image) for Titan Image v1."""
-    
-    # Get index dimensions first
-    dimensions = _get_index_dimensions(s3vector_service, vector_bucket_name, index_name, console, debug=bedrock_service.debug)
-    
-    with _create_progress_context(console) as progress:
-        
-        # Read and encode image
-        image_task = progress.add_task("Processing image...", total=None)
-        try:
-            import base64
-            
-            # Check if it's an S3 URI or local file
-            if image_path.startswith('s3://'):
-                # Parse S3 URI
-                path_part = image_path[5:]  # Remove 's3://'
-                if '/' not in path_part:
-                    raise ValueError(f"Invalid S3 URI format: {image_path}")
-                
-                bucket, key = path_part.split('/', 1)
-                
-                # Read from S3
-                response = s3_client.get_object(Bucket=bucket, Key=key)
-                image_data = base64.b64encode(response['Body'].read()).decode('utf-8')
-            else:
-                # Read local file
-                with open(image_path, 'rb') as image_file:
-                    image_data = base64.b64encode(image_file.read()).decode('utf-8')
-                    
-            progress.update(image_task, description="Image processed ✓")
-        except Exception as e:
-            raise click.ClickException(f"Failed to read image file: {str(e)}")
-        
-        # Generate multimodal embedding
-        embedding = bedrock_service.embed_image(model_id, image_data, text_input=text_value, dimensions=dimensions)
-        embed_task = progress.add_task("Generating multimodal embedding...", total=None)
-        progress.update(embed_task, description="Multimodal embedding generated ✓")
-        
-        # Prepare metadata - add both text and image info
-        metadata_dict.update({
-            'S3VECTORS-EMBED-SRC-CONTENT': text_value,
-            'S3VECTORS-EMBED-SRC-LOCATION': image_path
-        })
-        
-        # Generate vector ID if not provided
-        vector_key = _generate_vector_id_if_needed(key)
-        
-        # Store vector
-        _store_vector_with_progress(progress, s3vector_service, vector_bucket_name, index_name, 
-                                  vector_key, embedding, metadata_dict)
-    
-    return _create_result_dict(vector_key, vector_bucket_name, index_name, model_id, 
-                              'multimodal', embedding, metadata_dict)
+if __name__ == '__main__':
+    embed_put()
 
 
-def _process_text_value(text_value, vector_bucket_name, index_name, model_id,
-                       bedrock_service, s3vector_service, metadata_dict, key, console):
-    """Process direct text value input."""
-    
-    # Get index dimensions first
-    dimensions = _get_index_dimensions(s3vector_service, vector_bucket_name, index_name, console, debug=bedrock_service.debug)
-    
-    with _create_progress_context(console) as progress:
-        
-        # Generate embedding with dimensions
-        embedding = _generate_embedding_with_progress(progress, bedrock_service, model_id, 
-                                                    text_value, dimensions)
-        
-        # Prepare metadata - add standard fields for direct text
-        metadata_dict.update({
-            'S3VECTORS-EMBED-SRC-CONTENT': text_value
-        })
-        
-        # Generate vector ID if not provided
-        vector_key = _generate_vector_id_if_needed(key)
-        
-        # Store vector
-        _store_vector_with_progress(progress, s3vector_service, vector_bucket_name, index_name, 
-                                  vector_key, embedding, metadata_dict, "Storing vector in S3...")
-    
-    return _create_result_dict(vector_key, vector_bucket_name, index_name, model_id, 
-                              'text', embedding, metadata_dict)
+def _process_streaming_batch(file_path, content_type, vector_bucket_name, index_name,
+                           model, metadata_dict, user_bedrock_params, async_output_s3_uri,
+                           src_bucket_owner, processor, console, output, max_workers, batch_size, index_dimensions):
+    """Process wildcard pattern using efficient streaming batch orchestrator."""
 
-
-def _process_file_input(file_input, vector_bucket_name, index_name, model_id,
-                       bedrock_service, s3vector_service, s3_client, metadata_dict,
-                       src_bucket_owner, use_object_key_name, max_workers,
-                       vector_id, console, region, is_image=False):
-    """Process file input (text or image) - handles both single files and wildcards."""
-    
-    # Initialize input processor
-    input_processor = InputProcessor(s3_client)
     
     try:
-        # Process input - since this comes from --text parameter, we know it should be a file
-        if file_input.startswith('s3://'):
-            if file_input.endswith('*') or file_input.endswith('/*'):
-                input_type = "s3_wildcard"
-            else:
-                input_type = "s3_file"
-        elif '*' in file_input or '?' in file_input:
-            input_type = "local_wildcard"
-        else:
-            input_type = "local_file"
-            
-        processed_input = input_processor.process_input(
-            file_input, 
-            input_type=input_type, 
-            bucket_owner=src_bucket_owner,
-            is_image=is_image
+        # Create streaming batch orchestrator
+        streaming_orchestrator = StreamingBatchOrchestrator(processor, max_workers, batch_size)
+        
+        console.print(f"Starting streaming batch processing: {file_path}")
+        
+        # Process using streaming approach (no pre-loading of file paths)
+        batch_result = streaming_orchestrator.process_streaming_batch(
+            file_path, content_type, vector_bucket_name, index_name, model,
+            metadata_dict, async_output_s3_uri, src_bucket_owner, user_bedrock_params, index_dimensions
         )
         
-        if processed_input.get('batch_processing'):
-            # Batch processing for wildcards
-            return _process_batch(
-                processed_input, vector_bucket_name, index_name, model_id,
-                bedrock_service, s3vector_service, s3_client, metadata_dict,
-                use_object_key_name, max_workers, console
-            )
+        # Display results
+        if output == "table":
+            _display_batch_table(batch_result, console)
         else:
-            # Single file processing
-            return _process_single_file(
-                processed_input, vector_bucket_name, index_name, model_id,
-                bedrock_service, s3vector_service, metadata_dict, vector_id, console, is_image
-            )
+            result_dict = {
+                "type": "streaming_batch",
+                "bucket": vector_bucket_name,
+                "index": index_name,
+                "model": model.model_id,
+                "contentType": content_type,
+                "totalFiles": batch_result.processed_count + batch_result.failed_count,
+                "processedFiles": batch_result.processed_count,
+                "failedFiles": batch_result.failed_count,
+                "totalVectors": batch_result.processed_count,
+                "vectorKeys": batch_result.processed_keys[:10] if batch_result.processed_keys else []  # Show first 10
+            }
             
+            if batch_result.errors:
+                result_dict["errors"] = batch_result.errors[:5]  # Show first 5 errors
+            
+            console.print_json(data=result_dict)
+            
+            # Print display limit messages after JSON output
+            if len(batch_result.processed_keys) > 10:
+                console.print(f"[dim]Note: Showing first 10 of {len(batch_result.processed_keys)} vector keys[/dim]")
+            
+            if batch_result.errors and len(batch_result.errors) > 5:
+                console.print(f"[dim]Note: Showing first 5 of {len(batch_result.errors)} errors[/dim]")
+        
+        return result_dict if output == "json" else None
+        
     except Exception as e:
-        input_type = "image" if is_image else "text"
-        raise click.ClickException(f"Failed to process {input_type} input: {str(e)}")
-
-
-def _process_text_input(text_input, vector_bucket_name, index_name, model_id,
-                       bedrock_service, s3vector_service, s3_client, metadata_dict,
-                       src_bucket_owner, use_object_key_name, max_workers,
-                       vector_id, console, region):
-    """Process text input (file or S3 URI or wildcard)."""
-    return _process_file_input(text_input, vector_bucket_name, index_name, model_id,
-                              bedrock_service, s3vector_service, s3_client, metadata_dict,
-                              src_bucket_owner, use_object_key_name, max_workers,
-                              vector_id, console, region, is_image=False)
-
-
-def _process_image_input(image_input, vector_bucket_name, index_name, model_id,
-                        bedrock_service, s3vector_service, s3_client, metadata_dict,
-                        src_bucket_owner, use_object_key_name, max_workers,
-                        vector_id, console, region):
-    """Process image input (file or S3 URI or wildcard)."""
-    return _process_file_input(image_input, vector_bucket_name, index_name, model_id,
-                              bedrock_service, s3vector_service, s3_client, metadata_dict,
-                              src_bucket_owner, use_object_key_name, max_workers,
-                              vector_id, console, region, is_image=True)
-
-
-def _process_single_file(processed_input, vector_bucket_name, index_name, model_id,
-                        bedrock_service, s3vector_service, metadata_dict, key, console, is_image=False):
-    """Process single file (text or image)."""
-    
-    # Get index dimensions first
-    dimensions = _get_index_dimensions(s3vector_service, vector_bucket_name, index_name, console, debug=bedrock_service.debug)
-    
-    with _create_progress_context(console) as progress:
+        console.print(f"[red]Streaming batch processing failed: {str(e)}[/red]")
+        raise click.ClickException(f"Streaming batch processing failed: {str(e)}")
         
-        # Generate embedding with dimensions
-        embedding = _generate_embedding_with_progress(progress, bedrock_service, model_id, 
-                                                    processed_input['content'], dimensions, is_image)
+        # Prepare output in unified format
+        result = {
+            "type": "batch",
+            "bucket": vector_bucket_name,
+            "index": index_name,
+            "model": model.model_id,
+            "contentType": content_type,
+            "totalFiles": batch_result.total_files,
+            "processedFiles": batch_result.processed_count,  # Note: processed_count not processed_files
+            "failedFiles": batch_result.failed_count,
+            "totalVectors": batch_result.processed_count,    # Each file = 1 vector
+            "vectorKeys": batch_result.processed_keys
+        }
         
-        # Prepare metadata - only use the metadata from processed input and custom metadata
-        final_metadata = processed_input['metadata'].copy()
-        final_metadata.update(metadata_dict)
-        
-        # Generate vector ID if not provided
-        vector_key = _generate_vector_id_if_needed(key)
-        
-        # Store vector
-        _store_vector_with_progress(progress, s3vector_service, vector_bucket_name, index_name, 
-                                  vector_key, embedding, final_metadata, "Storing vector in S3...")
-    
-    content_type = 'image' if is_image else 'text'
-    return _create_result_dict(vector_key, vector_bucket_name, index_name, model_id, 
-                              content_type, embedding, final_metadata)
-
-
-def _process_batch(processed_input, vector_bucket_name, index_name, model_id,
-                  bedrock_service, s3vector_service, s3_client, metadata_dict,
-                  use_object_key_name, max_workers, console):
-    """Process batch wildcard input (S3 or local filesystem)."""
-    
-    # Initialize batch processor
-    config = BatchConfig(
-        max_workers=max_workers,
-        max_vectors_per_batch=500  # Maximum 500 vectors per batch
-    )
-    
-    batch_processor = BatchProcessor(
-        s3_client=s3_client,
-        bedrock_service=bedrock_service,
-        s3vector_service=s3vector_service,
-        config=config
-    )
-    
-    # Process wildcard pattern based on type
-    try:
-        if processed_input['type'] == 's3_wildcard':
-            # S3 wildcard processing
-            result = batch_processor.process_wildcard_pattern(
-                s3_pattern=processed_input['pattern'],
-                vector_bucket=vector_bucket_name,
-                index_name=index_name,
-                model_id=model_id,
-                metadata_template=metadata_dict,
-                bucket_owner=processed_input.get('bucket_owner'),
-                use_object_key_name=use_object_key_name
-            )
-        elif processed_input['type'] == 'local_wildcard':
-            # Local filesystem wildcard processing
-            result = batch_processor.process_local_wildcard_pattern(
-                local_pattern=processed_input['pattern'],
-                vector_bucket=vector_bucket_name,
-                index_name=index_name,
-                model_id=model_id,
-                metadata_template=metadata_dict,
-                use_object_key_name=use_object_key_name
-            )
+        if output == "table":
+            _display_batch_table(result, console)
         else:
-            raise ValueError(f"Unsupported batch processing type: {processed_input['type']}")
-            
-    except ValueError as e:
-        # Convert ValueError from batch processor to ClickException
-        raise click.ClickException(str(e))
-    
-    return {
-        'type': 'batch',
-        'pattern': processed_input['pattern'],
-        'bucket': vector_bucket_name,
-        'index': index_name,
-        'model': model_id,
-        'processed_count': result['processed_count'],
-        'failed_count': result['failed_count'],
-        'keys': result['Keys'],
-        'status': result['status']
-    }
-
-
-def _display_results(result, output_format, console):
-    """Display results in the specified format."""
-    if output_format == 'json':
-        # JSON output
-        if result['type'] == 'single':
-            json_data = {
-                "key": result['key'],
-                "bucket": result['bucket'],
-                "index": result['index'],
-                "model": result['model'],
-                "contentType": result['contentType'],
-                "embeddingDimensions": result['embeddingDimensions'],
-                "metadata": result['metadata']
-            }
-        else:  # batch
-            json_data = {
-                "Keys": result['keys'],
-                "status": result['status'],
-                "pattern": result['pattern'],
-                "processed_count": result['processed_count'],
-                "bucket": result['bucket'],
-                "index": result['index'],
-                "model": result['model']
-            }
+            console.print_json(data=result)
         
-        console.print_json(data=json_data)
-    else:
-        # Table output
-        if result['type'] == 'single':
-            table = Table(title="Vector Storage Results")
-            table.add_column("Property", style="cyan")
-            table.add_column("Value", style="green")
-            
-            table.add_row("Key", result['key'])
-            table.add_row("Bucket", result['bucket'])
-            table.add_row("Index", result['index'])
-            table.add_row("Model", result['model'])
-            table.add_row("Content Type", result['contentType'])
-            table.add_row("Embedding Dimensions", str(result['embeddingDimensions']))
-            
-            console.print(table)
-            console.print(f"\n[green]✓ Successfully stored vector with key: {result['key']}[/green]")
-        else:  # batch
-            table = Table(title="Batch Processing Results")
-            table.add_column("Property", style="cyan")
-            table.add_column("Value", style="green")
-            
-            table.add_row("Pattern", result['pattern'])
-            table.add_row("Status", result['status'])
-            table.add_row("Processed Count", str(result['processed_count']))
-            table.add_row("Total Keys", str(len(result['keys'])))
-            table.add_row("Bucket", result['bucket'])
-            table.add_row("Index", result['index'])
-            table.add_row("Model", result['model'])
-            
-            console.print(table)
-            
-            if result['status'] == 'success':
-                console.print(f"\n[green] Batch processing completed successfully![/green]")
-                console.print(f"[green] Processed {result['processed_count']} files[/green]")
-            else:
-                console.print(f"\n[yellow] Batch processing completed with errors[/yellow]")
-                console.print(f"[yellow] Processed: {result['processed_count']} files[/yellow]")
+    except Exception as e:
+        raise click.ClickException(f"Failed to process batch {file_path}: {str(e)}")
+
+
+def _display_batch_table(result, console):
+    """Display batch results in table format."""
+    from rich.table import Table
+    
+    table = Table(title="Batch Processing Results")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="green")
+    
+    table.add_row("Total Files", str(result["totalFiles"]))
+    table.add_row("Processed Files", str(result["processedFiles"]))
+    table.add_row("Failed Files", str(result["failedFiles"]))
+    table.add_row("Total Vectors", str(result["totalVectors"]))
+    table.add_row("Model", result["model"])
+    table.add_row("Content Type", result["contentType"])
+    
+    console.print(table)

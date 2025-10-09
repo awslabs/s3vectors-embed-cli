@@ -14,7 +14,7 @@ install(show_locals=True)
 console = Console()
 
 @click.group()
-@click.version_option(version="0.1.0")
+@click.version_option(version="0.2.0")
 @click.option('--profile', help='AWS profile to use')
 @click.option('--region', help='AWS region to use')
 @click.option('--debug', is_flag=True, help='Enable debug mode with detailed logging')
