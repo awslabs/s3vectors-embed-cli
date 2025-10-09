@@ -155,6 +155,12 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
         else:
             validate_model_modality(model_id, content_type)
         
+        # Validate async model requirements
+        if model.is_async() and not async_output_s3_uri:
+            raise click.ClickException(
+                f"Async models like {model.model_id} require --async-output-s3-uri parameter."
+            )
+        
         # Parse user parameters
         user_bedrock_params = {}
         if bedrock_inference_params:

@@ -14,18 +14,17 @@ You can create and ingest vector embeddings into an S3 vector index using a sing
 **s3vectors-embed query**: Embed a query input and search for similar vectors in an S3 vector index.
 You can perform similarity queries for vector embeddings in your S3 vector index using a single query command. You specify your query input, an Amazon Bedrock embeddings model ID, the vector bucket name, and vector index name. The command accepts several types of query inputs like a text string, an image file, or a single S3 text or image object. The command generates embeddings for your query using the input embeddings model and then performs a similarity search to find the most relevant matches. You can control the number of results returned, apply metadata filters to narrow your search, and choose whether to include similarity distance in the results for comprehensive analysis.
 
-### Query Input Types
+### Supported Input Types
 
-The query command now supports explicit input type parameters for better clarity and consistency:
+**Note**: 
+Starting version 0.2.0, this CLI has introduced a unified `--bedrock-inference-params` paramter for all model-specific parameters.
+Additionally, the `--query-input` parameter in the query command has been replaced with the following individual parameters instead: 
 
 - **`--text-value`**: Direct text query string (preferred for text queries)
 - **`--text`**: Text file path (local file or S3 URI)
 - **`--image`**: Image file path (local file or S3 URI)
 - **`--video`**: Video file path (local file or S3 URI) - TwelveLabs models only
 - **`--audio`**: Audio file path (local file or S3 URI) - TwelveLabs models only
-
-**Backward compatibility:** The legacy `--query-input` parameter is no longer supported and will throw an error. Use the new explicit parameters instead.
-
 
 ## Installation and Configuration
 ### Prerequisites
@@ -34,26 +33,6 @@ The query command now supports explicit input type parameters for better clarity
 - Update your AWS account with appropriate permissions to use Amazon Bedrock and S3 Vectors
 - Access to an Amazon Bedrock embedding model
 - Create an Amazon S3 vector bucket and vector index to store your embeddings
-
-#### Additional Prerequisites for TwelveLabs Models
-For TwelveLabs models (`twelvelabs.marengo-embed-2-7-v1:0`), you need:
-- An S3 bucket for async processing results with the following bucket policy:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {"Service": "bedrock.amazonaws.com"},
-      "Action": ["s3:PutObject", "s3:GetObject"],
-      "Resource": "arn:aws:s3:::your-async-bucket/*"
-    }
-  ]
-}
-```
-
-**Note**: Replace `your-async-bucket` with your actual bucket name. This policy allows Amazon Bedrock to write async processing results to your bucket.
 
 ### Quick Install (Recommended)
 ```bash
@@ -71,7 +50,6 @@ pip install -e .
 ```
 
 **Note**: All dependencies are automatically installed when you install the package via pip.
-
 
 ### Quick Start
 
@@ -142,11 +120,11 @@ s3vectors-embed put \
   --bedrock-inference-params '{"normalize": false}'
 ```
 
-#### **TwelveLabs Examples (Async Processing)**
+#### ** Examples for the TwelveLabs Marengo Embedding Model (Async Processing)**
 
-**Note**: Ensure your S3 bucket has the required bucket policy (see Prerequisites section).
+**Note:** For the TwelveLabs model (`twelvelabs.marengo-embed-2-7-v1:0`), Bedrock processes data asynchronously and first stores the embedding output in a general purpose S3 bucket that you specify. 
 
-7. **TwelveLabs text embedding:**
+7. **TwelveLabs embeddings for text data :**
 ```bash
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
@@ -156,7 +134,7 @@ s3vectors-embed put \
   --async-output-s3-uri s3://my-async-bucket
 ```
 
-8. **TwelveLabs video embedding with local file (up to 36MB for TwelveLabs models):**
+8. **TwelveLabs embeddings for a local video file (up to 36MB for TwelveLabs models):**
 ```bash
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
@@ -167,7 +145,7 @@ s3vectors-embed put \
   --bedrock-inference-params '{"useFixedLengthSec": 5, "minClipSec": 2, "embeddingOption": ["visual-text", "audio"]}'
 ```
 
-9. **TwelveLabs video embedding with S3 URI (up to 2GB, recommended for large files):**
+9. **TwelveLabs embeddings for an S3 URI video input (up to 2GB, recommended for large files):**
 ```bash
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
@@ -179,7 +157,7 @@ s3vectors-embed put \
   --src-bucket-owner 123456789012  # Optional: only needed for cross-account access
 ```
 
-10. **TwelveLabs audio with time range (local file):**
+10. **TwelveLabs embeddings for a local audio file:**
 ```bash
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
@@ -190,7 +168,7 @@ s3vectors-embed put \
   --bedrock-inference-params '{"startSec": 10.0, "lengthSec": 30.0}'
 ```
 
-11. **TwelveLabs audio with S3 URI:**
+11. **TwelveLabs embeddings for an S3 URI audio input:**
 ```bash
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
@@ -202,7 +180,7 @@ s3vectors-embed put \
   --src-bucket-owner 123456789012  # Optional: only needed for cross-account access
 ```
 
-12. **TwelveLabs image embedding:**
+12. **TwelveLabs image embeddings:**
 ```bash
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
@@ -212,7 +190,7 @@ s3vectors-embed put \
   --async-output-s3-uri s3://my-async-bucket
 ```
 
-13. **TwelveLabs comprehensive video example with all options:**
+13. **TwelveLabs embeddings for a video file using additional options:**
 ```bash
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
@@ -227,7 +205,7 @@ s3vectors-embed put \
 
 #### **Query Examples**
 
-1. **Direct text query (preferred method):**
+1. **Direct text query:**
 ```bash
 s3vectors-embed query \
   --vector-bucket-name my-bucket \
@@ -268,7 +246,7 @@ s3vectors-embed query \
   --k 5
 ```
 
-5. **TwelveLabs cross-modal text search:**
+5. **TwelveLabs: cross-modal text search:**
 ```bash
 s3vectors-embed query \
   --vector-bucket-name my-bucket \
@@ -279,7 +257,7 @@ s3vectors-embed query \
   --k 5
 ```
 
-6. **TwelveLabs video query with defaults (0-5 second clip):**
+6. **TwelveLabs: Query using a video input with the default time range (0-5 second clip):**
 ```bash
 s3vectors-embed query \
   --vector-bucket-name my-bucket \
@@ -291,7 +269,7 @@ s3vectors-embed query \
   --k 5
 ```
 
-7. **TwelveLabs video query with custom time range:**
+7. **TwelveLabs: Query using a video input with a custom time range:**
 ```bash
 s3vectors-embed query \
   --vector-bucket-name my-bucket \
@@ -303,7 +281,7 @@ s3vectors-embed query \
   --k 5
 ```
 
-8. **TwelveLabs audio query:**
+8. **TwelveLabs: Query using an audio input :**
 ```bash
 s3vectors-embed query \
   --vector-bucket-name my-bucket \
@@ -315,7 +293,7 @@ s3vectors-embed query \
   --k 5
 ```
 
-9. **TwelveLabs S3 video query with visual-image embedding:**
+9. **TwelveLabs: Query using a visual-image embedding from a video input:**
 ```bash
 s3vectors-embed query \
   --vector-bucket-name my-bucket \
@@ -328,7 +306,7 @@ s3vectors-embed query \
   --src-bucket-owner 123456789012  # Optional: only needed for cross-account access
 ```
 
-10. **Query with metadata filters:**
+10. **Titan Text: Query with metadata filters:**
 ```bash
 s3vectors-embed query \
   --vector-bucket-name my-bucket \
@@ -340,7 +318,7 @@ s3vectors-embed query \
   --return-metadata
 ```
 
-11. **Query with multiple metadata filters (AND):**
+11. **Titan Text: Query with multiple metadata filters (AND):**
 ```bash
 s3vectors-embed query \
   --vector-bucket-name my-bucket \
@@ -352,7 +330,7 @@ s3vectors-embed query \
   --return-metadata
 ```
 
-12. **Query with multiple metadata filters (OR):**
+12. **Titan Text: Query with multiple metadata filters (OR):**
 ```bash
 s3vectors-embed query \
   --vector-bucket-name my-bucket \
@@ -363,7 +341,7 @@ s3vectors-embed query \
   --k 5
 ```
 
-13. **Query with metadata filters (comparison operators):**
+13. **Titan Text: Query with metadata filters (comparison operators):**
 ```bash
 s3vectors-embed query \
   --vector-bucket-name my-bucket \
@@ -374,7 +352,7 @@ s3vectors-embed query \
   --k 10
 ```
 
-14. **Query with custom model parameters:**
+14. **Cohere: Query with custom model parameters:**
 ```bash
 s3vectors-embed query \
   --vector-bucket-name my-bucket \
@@ -385,9 +363,6 @@ s3vectors-embed query \
   --k 5 \
   --return-distance
 ```
-
-**Parameter Migration:**
-The CLI now uses a unified `--bedrock-inference-params` system for all model-specific parameters. Individual TwelveLabs parameters (like `--embedding-options`, `--start-sec`, etc.) have been migrated to this unified system for consistency across all models.
 
 
 ### Command Parameters
@@ -523,327 +498,13 @@ s3vectors-embed query --vector-bucket-name my-bucket --index-name my-index \
 | `cohere.embed-multilingual-v3` | Multimodal (Text or Image) | 1024 | Multilingual text or image embedding | Sync |
 | `twelvelabs.marengo-embed-2-7-v1:0` | Multimodal (Video, Audio, Text, Image) | 1024 | Video and audio understanding | **Async** |
 
-**Note**: TwelveLabs models require async processing (~60 seconds) and an S3 bucket for results. See Prerequisites section for bucket policy setup.
-
-## TwelveLabs Multimodal Embeddings
-
-The TwelveLabs Marengo Embed 2.7 model (`twelvelabs.marengo-embed-2-7-v1:0`) provides advanced multimodal embeddings for video, audio, text, and image content. This model uses asynchronous processing and offers unique capabilities for understanding temporal media content.
-
-### Key Features
-
-- **Multimodal Support**: Process video, audio, text, and image content
-- **Temporal Understanding**: Generate multiple embeddings for video clips with time-based metadata
-- **Flexible Input Options**: Support both local files and S3 URIs
-- **Advanced Video Processing**: Configurable clip duration, embedding options, and time ranges
-- **Async Processing**: Handles large files efficiently with background processing
-
-### Input Methods
-
-#### Local Files (Model-Based Size Limits)
-**Note**: File size limits are determined by the embedding model. TwelveLabs models support up to 36MB for local files.
-
-```bash
-# Video processing with local file
-s3vectors-embed put \
-  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
-  --video ./video.mp4 \
-  --async-output-s3-uri s3://my-async-bucket
-```
-
-#### S3 URIs (up to 2GB, recommended for large files)
-```bash
-# Video processing with S3 URI
-s3vectors-embed put \
-  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
-  --video s3://my-bucket/large-video.mp4 \
-  --async-output-s3-uri s3://my-async-bucket \
-  --src-bucket-owner 123456789012
-```
-
-### Video Processing Options
-
-#### Embedding Options (via `--bedrock-inference-params`)
-Control what aspects of the video to embed using the unified parameter system:
-- `visual-text`: Extract and embed text visible in the video
-- `visual-image`: Embed visual content and scenes
-- `audio`: Embed audio content and speech
-
-```bash
-# Combine multiple embedding options using the unified parameter system
---bedrock-inference-params '{"embeddingOption": ["visual-text", "visual-image", "audio"]}'
-```
-
-#### Clip Duration Settings (via `--bedrock-inference-params`)
-- `useFixedLengthSec`: Set fixed duration for each clip (2-10 seconds)
-- `minClipSec`: Minimum clip duration (1-5 seconds)
-
-```bash
-# Process video in 5-second clips with minimum 2-second duration
---bedrock-inference-params '{"useFixedLengthSec": 5, "minClipSec": 2}'
-```
-
-#### Time Range Processing (via `--bedrock-inference-params`)
-- `startSec`: Start processing from specific time
-- `lengthSec`: Duration to process
-
-```bash
-# Process 30 seconds starting from 10 seconds into the video
---bedrock-inference-params '{"startSec": 10.0, "lengthSec": 30.0}'
-```
-
-### Multi-Clip Results
-
-TwelveLabs video processing generates multiple embeddings (one per clip) with temporal metadata:
-
-```json
-{
-  "type": "twelvelabs_multiclip",
-  "bucket": "my-bucket",
-  "index": "my-index", 
-  "model": "twelvelabs.marengo-embed-2-7-v1:0",
-  "contentType": "video",
-  "totalVectors": 28,
-  "vectors": [
-    {
-      "key": "video-clip-0-abc123",
-      "clip_index": 0,
-      "embedding_option": "visual-text,audio",
-      "start_sec": 0.0,
-      "end_sec": 5.0,
-      "embedding_dimensions": 1024
-    }
-  ]
-}
-```
-
-### Automatic Metadata
-
-TwelveLabs processing automatically adds metadata fields:
-- `S3VECTORS-EMBED-SRC-LOCATION`: Original file location
-- `S3VECTORS-EMBED-START-SEC`: Clip start time
-- `S3VECTORS-EMBED-END-SEC`: Clip end time
-- `S3VECTORS-EMBED-TYPE`: Embedding options used
-
-### Processing Time
-
-TwelveLabs models use asynchronous processing:
-- **Text**: ~10-30 seconds
-- **Image**: ~30-60 seconds  
-- **Audio**: ~60-120 seconds
-- **Video**: ~60-300 seconds (depending on length and options)
-
-The CLI automatically waits for completion and retrieves results from S3.
-
-### Best Practices
-
-1. **Use S3 URIs for large files**: More efficient than base64 encoding
-2. **Set appropriate clip durations**: Balance between granularity and processing time
-3. **Choose relevant embedding options**: Only select options needed for your use case
-4. **Consider time ranges**: Process specific segments for faster results
-5. **Monitor S3 costs**: Async processing creates temporary files in your output bucket
-
-## TwelveLabs Query Operations
-
-The TwelveLabs Marengo Embed 2.7 model (`twelvelabs.marengo-embed-2-7-v1:0`) has specific behavior for query operations that differs from PUT operations. Understanding these differences is crucial for effective semantic search.
-
-### Key Characteristics of TwelveLabs Queries
-
-#### **Always Single Embedding Output**
-Unlike PUT operations that can generate multiple embeddings for long videos, **all TwelveLabs query operations produce exactly ONE embedding**. This design ensures consistent similarity search behavior.
-
-#### **Fixed Time Window Processing**
-For video and audio queries, TwelveLabs uses a fixed time window approach:
-
-**Default Behavior (when time parameters are not specified):**
-- `--start-sec`: Defaults to `0.0` (start from beginning)
-- `--use-fixed-length-sec`: Defaults to `5.0` (process 5 seconds)
-- **Result**: Always processes seconds 0-5 of the media file
-
-**Custom Time Window:**
-```bash
-# Process seconds 30-38 (8-second window)
-s3vectors-embed query \
-  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
-  --video ./query-video.mp4 \
-  --async-output-s3-uri s3://my-async-bucket \
-  --bedrock-inference-params '{"embeddingOption": ["visual-text"], "startSec": 30.0, "useFixedLengthSec": 8.0}'
-```
-
-### Query vs PUT Operation Differences
-
-| Aspect | Query Operations | PUT Operations |
-|--------|------------------|----------------|
-| **Embedding Count** | Always 1 embedding | 1 or multiple embeddings |
-| **Time Processing** | Required time window (`startSec` + `lengthSec`) | Full duration or specified range |
-| **Purpose** | Generate query vector for search | Store vectors in index |
-| **Video Segmentation** | No segmentation (single clip) | Auto-segmentation for long videos |
-| **Parameters** | `startSec`, `lengthSec`, `embeddingOption` (all required for video) | `startSec`, `lengthSec`, `useFixedLengthSec`, `minClipSec` |
-| **Timing Info** | Shows `queryStartSec`, `queryEndSec` in summary | Shows clip timing in metadata |
-
-### Input Type Behavior
-
-#### **Text Queries**
-- **Processing**: Direct text embedding (no time parameters)
-- **Output**: 1 embedding
-- **Duration**: ~10-30 seconds
-
-```bash
-s3vectors-embed query \
-  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
-  --text-value "red sports car chase scene"
-```
-
-#### **Video Queries**
-- **Processing**: Required time window (user must specify `startSec` and `lengthSec`)
-- **Output**: 1 embedding
-- **Duration**: ~60-120 seconds
-- **Required**: `embeddingOption` (exactly one), `startSec`, and `lengthSec` parameters
-
-```bash
-# Process 5-second clip starting at 10 seconds
-s3vectors-embed query \
-  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
-  --video ./query-video.mp4 \
-  --async-output-s3-uri s3://my-async-bucket \
-  --bedrock-inference-params '{"embeddingOption": ["visual-text"], "startSec": 10.0, "lengthSec": 5.0}'
-
-# Process 3-second audio clip starting at 15 seconds
-s3vectors-embed query \
-  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
-  --video ./query-video.mp4 \
-  --async-output-s3-uri s3://my-async-bucket \
-  --bedrock-inference-params '{"embeddingOption": ["audio"], "startSec": 15.0, "lengthSec": 3.0}'
-```
-
-#### **Audio Queries**
-- **Processing**: Required time window (user must specify `startSec` and `lengthSec`)
-- **Output**: 1 embedding
-- **Duration**: ~60-120 seconds
-- **Auto-selected**: `audio` embedding option
-
-```bash
-# Process 4-second audio clip starting at 20 seconds
-s3vectors-embed query \
-  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
-  --audio ./query-audio.wav \
-  --async-output-s3-uri s3://my-async-bucket \
-  --bedrock-inference-params '{"startSec": 20.0, "lengthSec": 4.0}'
-```
-
-#### **Image Queries**
-- **Processing**: Direct image embedding (no time parameters)
-- **Output**: 1 embedding
-- **Duration**: ~30-60 seconds
-
-```bash
-s3vectors-embed query \
-  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
-  --image ./query-image.jpg \
-  --async-output-s3-uri s3://my-async-bucket
-```
-
-### Query Timing Information
-
-TwelveLabs video and audio queries now display timing information in the query summary:
-
-```json
-{
-  "results": [...],
-  "summary": {
-    "queryType": "video",
-    "model": "twelvelabs.marengo-embed-2-7-v1:0",
-    "index": "my-index",
-    "resultsFound": 5,
-    "queryDimensions": 1024,
-    "queryStartSec": 10.0,
-    "queryEndSec": 15.0
-  }
-}
-```
-
-This shows users exactly what time window (10.0 to 15.0 seconds) was processed to generate the query embedding.
-
-### Cross-Modal Search Capabilities
-
-TwelveLabs queries enable powerful cross-modal search scenarios:
-
-#### **Text-to-Video Search**
-```bash
-# Find videos containing "car chase" scenes
-s3vectors-embed query \
-  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
-  --text-value "high speed car chase through city streets" \
-  --async-output-s3-uri s3://my-async-bucket
-```
-
-#### **Video-to-Text Search**
-```bash
-# Find text descriptions similar to video content
-s3vectors-embed query \
-  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
-  --video ./action-scene.mp4 \
-  --async-output-s3-uri s3://my-async-bucket \
-  --bedrock-inference-params '{"embeddingOption": ["visual-text"], "startSec": 5.0, "lengthSec": 3.0}'
-```
-
-### Important Considerations
-
-#### **File Duration Impact**
-- **Short files** (< 5 seconds): Processed entirely, may be padded
-- **Long files** (> 5 seconds): Only the specified time window is processed
-- **Query consistency**: Always produces same-sized embedding regardless of input duration
-
-#### **Embedding Options for Video**
-- **`visual-text`**: Extract and embed text visible in video frames
-- **`visual-image`**: Embed visual scenes and objects
-- **`audio`**: Embed audio content and speech
-
-#### **Time Parameter Validation**
-- `--use-fixed-length-sec`: Must be between 2-10 seconds
-- `--start-sec`: Must be ≥ 0 and within file duration
-- Invalid ranges will result in processing errors
-
-#### **Performance Optimization**
-- **Shorter clips process faster**: Use smaller `--use-fixed-length-sec` values
-- **Specific time ranges**: Target relevant content sections with `--start-sec`
-- **Appropriate embedding options**: Choose only needed options for video queries
-
-### Query Result Processing
-
-Query command for TwelveLabs Marengo Embed 2.7 model generates a single embedding internally and returns similarity search results:
-
-```python
-# Internal processing (for reference)
-query_embedding = generate_single_embedding(query_input)  # Always single embedding
-search_results = similarity_search(query_embedding, stored_vectors)  # Returns matching vectors
-```
-
-This single embedding approach ensures:
-- **Consistent search behavior**: Same query always produces same embedding
-- **Efficient similarity search**: One-to-many comparison against stored vectors
-- **Predictable performance**: Fixed processing time per query
-- **Simple result handling**: No need to aggregate multiple embeddings
+**Note**: TwelveLabs models require async processing (~60 seconds) and an S3 general purpose bucket location to store the interim embedding results. 
 
 ## Advanced Model Parameters
 
 ### **Bedrock Inference Parameters (`--bedrock-inference-params`)**
 
 The `--bedrock-inference-params` parameter allows you to pass model-specific parameters directly to Amazon Bedrock embedding models. This unified parameter system works across all models and operations (PUT and QUERY), providing fine-grained control over embedding generation.
-
-#### **Key Features**
-
-- **Unified Interface**: Same parameter for all models and operations
-- **Model-Specific Support**: Each model accepts different parameters
-- **Automatic Validation**: Prevents conflicts with system-controlled parameters
-- **JSON Format**: Easy to use with complex parameter structures
-
-#### **Parameter Format**
-
-```bash
---bedrock-inference-params '{"parameter1": "value1", "parameter2": value2}'
-```
-
-**Important**: Use single quotes around the JSON string and double quotes inside JSON.
 
 #### **Model-Specific Parameters**
 
@@ -894,27 +555,6 @@ s3vectors-embed put \
   --async-output-s3-uri s3://my-bucket \
   --bedrock-inference-params '{"startSec": 30.0, "useFixedLengthSec": 10, "embeddingOption": ["visual-text"]}'
 ```
-
-#### **Parameter Validation and Conflicts**
-
-The CLI automatically prevents conflicts with system-controlled parameters:
-
-```bash
-# This will fail - inputText is system-controlled
-s3vectors-embed put \
-  --model-id amazon.titan-embed-text-v2:0 \
-  --text-value "Sample text" \
-  --bedrock-inference-params '{"inputText": "override attempt"}'
-
-# Error: Cannot override system-controlled parameters: ['inputText']
-# These parameters are automatically set based on your CLI inputs
-```
-
-**System-Controlled Parameters (Cannot Override):**
-- **All Models**: `inputText`, `modelId`
-- **Cohere Models**: `input_type` (automatically set to "search_document" for PUT, "search_query" for QUERY)
-- **TwelveLabs Models**: `inputType`, `mediaSource`
-
 #### **Valid Parameters by Model**
 
 | Model | Valid Parameters | Example Values |
@@ -1289,7 +929,7 @@ The CLI supports efficient batch processing for multiple files using both local 
 - **Automatic batching**: Large datasets are automatically split into batches of 500 vectors
 - **Dual processing strategies**: 
   - **Sync models** (text/image): Parallel processing with batch storage
-  - **Async models** (video/audio): Parallel async processing with per-file storage
+  - **Async models** (text/image/video/audio): Parallel async processing with per-file storage
 - **Error resilience**: Individual file failures don't stop batch processing
 - **Performance optimization**: Efficient memory usage and API call batching
 - **User-controlled concurrency**: Configure parallel workers with `--max-workers`
@@ -1300,12 +940,12 @@ The CLI automatically selects the optimal processing strategy based on content t
 
 | Content Type | Processing Mode | API Used | Batch Strategy | Output |
 |--------------|----------------|----------|----------------|---------|
-| **Text** | Sync | `InvokeModel` | Parallel batch storage | Single vector per file |
-| **Image** | Sync | `InvokeModel` | Parallel batch storage | Single vector per file |
+| **Text**  | Sync  | `InvokeModel` | Parallel batch storage | Single vector per file |
+| **Image** | Sync  | `InvokeModel` | Parallel batch storage | Single vector per file |
+| **Text**  | Async | `StartAsyncInvoke` | Parallel batch storage | Single vector per file |
+| **Image** | Async | `StartAsyncInvoke` | Parallel batch storage | Single vector per file |
 | **Video** | Async | `StartAsyncInvoke` | Per-file storage | Multiple vectors per file |
 | **Audio** | Async | `StartAsyncInvoke` | Per-file storage | Multiple vectors per file |
-
-**Note**: For TwelveLabs models, text and image use sync processing for optimal performance, while video and audio use async processing for temporal segmentation.
 
 ### Batch Processing Examples
 
