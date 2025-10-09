@@ -352,7 +352,7 @@ s3vectors-embed query \
   --k 10
 ```
 
-14. **Cohere: Query with custom model parameters:**
+14. **Cohere Embed v3: Query with custom model parameters:**
 ```bash
 s3vectors-embed query \
   --vector-bucket-name my-bucket \
@@ -363,7 +363,16 @@ s3vectors-embed query \
   --k 5 \
   --return-distance
 ```
-
+15. **TwelveLabs Marengo Embed 2.7: S3 video batch processing with high concurrency**
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id twelvelabs.marengo-embed-2-7-v1:0 \
+  --video "s3://bucket/videos/*" \
+  --async-output-s3-uri s3://my-async-bucket \
+  --bedrock-inference-params '{"embeddingOption": ["visual-image", "audio"], "startSec": 0, "useFixedLengthSec": 4}' \
+  --metadata '{"batch": "multimodal_processing"}' \
+  --max-workers 4
 
 ### Command Parameters
 
@@ -969,7 +978,7 @@ s3vectors-embed put \
   --metadata '{"category": "images", "source": "batch_upload"}' \
   --max-workers 2
 
-# TwelveLabs large image batch (sync processing)
+# TwelveLabs large image batch 
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
   --index-name my-index \
@@ -982,7 +991,7 @@ s3vectors-embed put \
 
 **Video/Audio Batch Processing:**
 ```bash
-# Local video batch processing with optimal concurrency
+# Local video batch processing 
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
   --index-name my-index \
@@ -993,7 +1002,7 @@ s3vectors-embed put \
   --metadata '{"batch": "video_processing", "date": "2025-09-14"}' \
   --max-workers 2
 
-# S3 video batch processing with high concurrency
+# S3 video batch processing 
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
   --index-name my-index \
@@ -1108,17 +1117,7 @@ aws bedrock list-foundation-models
 # Request body: {...} (shows what was attempted)
 ```
 
-4. **Performance Issues**
-```bash
-# Use debug mode to identify bottlenecks:
-s3vectors-embed --debug put ...
-
-# Debug output shows timing:
-#  Bedrock API call completed in 2.45 seconds (slow)
-#  S3 Vectors put_vectors completed in 0.15 seconds (normal)
-```
-
-5. **Service Unavailable Errors**
+4. **Service Unavailable Errors**
 ```bash
 # Error: ServiceUnavailableException
 # Debug output provides context:
@@ -1126,7 +1125,7 @@ s3vectors-embed --debug put ...
 # API parameters: {"vectorBucketName": "...", "indexName": "..."}
 ```
 
-6. **Bedrock Inference Parameters Issues**
+5. **Bedrock Inference Parameters Issues**
 ```bash
 # Error: Cannot override system-controlled parameters
 # Solution: Use only model-specific parameters, avoid system-controlled ones
