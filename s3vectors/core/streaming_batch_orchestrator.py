@@ -48,7 +48,8 @@ class StreamingBatchOrchestrator:
             'index_dimensions': index_dimensions,
             'user_bedrock_params': user_bedrock_params or {},
             'async_output_s3_uri': async_output_s3_uri,
-            'src_bucket_owner': src_bucket_owner
+            'src_bucket_owner': src_bucket_owner,
+            'batch_size': self.batch_size
         }
         
         # Process using appropriate streaming method
@@ -127,7 +128,9 @@ class StreamingBatchOrchestrator:
         chunk = []
         text_extensions = {'txt', 'md', 'json', 'csv', 'log'}
         image_extensions = {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp'}
-        all_extensions = text_extensions | image_extensions
+        video_extensions = {'mp4', 'avi', 'mov', 'mkv', 'wmv', 'flv', 'webm'}
+        audio_extensions = {'mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg', 'wma'}
+        all_extensions = text_extensions | image_extensions | video_extensions | audio_extensions
         
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             if 'Contents' not in page:
@@ -198,7 +201,9 @@ class StreamingBatchOrchestrator:
         chunk = []
         text_extensions = {'txt', 'md', 'json', 'csv', 'log'}
         image_extensions = {'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp'}
-        all_extensions = text_extensions | image_extensions
+        video_extensions = {'mp4', 'avi', 'mov', 'mkv', 'wmv', 'flv', 'webm'}
+        audio_extensions = {'mp3', 'wav', 'flac', 'aac', 'm4a', 'ogg', 'wma'}
+        all_extensions = text_extensions | image_extensions | video_extensions | audio_extensions
         
         # Use iglob for memory-efficient iteration
         for file_path in glob.iglob(pattern, recursive=True):
@@ -222,6 +227,26 @@ class StreamingBatchOrchestrator:
                       vector_bucket_name: str, index_name: str, 
                       metadata: Dict[str, Any], batch_context: Dict[str, Any]) -> Tuple[int, int, List[str], List[str]]:
         """Process a chunk of files using UnifiedProcessor."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        processed_count = 0
+        failed_count = 0
+        processed_keys = []
+        errors = []
+        
+        # For video/audio, process sequentially due to async nature
+        # For text/image, use parallel processing
+        if content_type in ["video", "audio"]:
+            return self._process_chunk_async(chunk_files, content_type, vector_bucket_name, 
+                                           index_name, metadata, batch_context)
+        else:
+            return self._process_chunk_sync(chunk_files, content_type, vector_bucket_name,
+                                          index_name, metadata, batch_context)
+    
+    def _process_chunk_sync(self, chunk_files: List[str], content_type: str,
+                           vector_bucket_name: str, index_name: str, 
+                           metadata: Dict[str, Any], batch_context: Dict[str, Any]) -> Tuple[int, int, List[str], List[str]]:
+        """Process text/image files in parallel (existing logic)."""
         from concurrent.futures import ThreadPoolExecutor, as_completed
         
         processed_count = 0
@@ -288,3 +313,84 @@ class StreamingBatchOrchestrator:
                 processed_keys = []
         
         return processed_count, failed_count, processed_keys, errors
+    
+    def _process_chunk_async(self, chunk_files: List[str], content_type: str,
+                            vector_bucket_name: str, index_name: str, 
+                            metadata: Dict[str, Any], batch_context: Dict[str, Any]) -> Tuple[int, int, List[str], List[str]]:
+        """Process video/audio files with parallel async processing."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        processed_files_count = 0  # Count files, not vectors
+        failed_files_count = 0     # Count files, not vectors
+        processed_keys = []
+        errors = []
+        
+        total_files = len(chunk_files)
+        print(f"Processing {total_files} {content_type} files with {self.max_workers} concurrent workers...")
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_to_file = {}
+            
+            # Submit all files for async processing
+            for file_path in chunk_files:
+                processing_input = ProcessingInput(content_type, {"file_path": file_path}, file_path, metadata)
+                
+                future = executor.submit(
+                    self.unified_processor.process,
+                    batch_context['model'],
+                    processing_input,
+                    batch_context['user_bedrock_params'],
+                    batch_context['async_output_s3_uri'],
+                    batch_context['src_bucket_owner'],
+                    vector_bucket_name,
+                    index_name,
+                    batch_context['index_dimensions']
+                )
+                future_to_file[future] = file_path
+            
+            # Collect results as they complete
+            completed_files = 0
+            for future in as_completed(future_to_file):
+                file_path = future_to_file[future]
+                completed_files += 1
+                
+                try:
+                    result = future.result()
+                    
+                    if result and result.vectors:
+                        # Store vectors from this file, chunking if needed
+                        try:
+                            file_vector_count = len(result.vectors)
+                            batch_size = batch_context['batch_size']
+                            
+                            if file_vector_count <= batch_size:
+                                # Small file - single API call
+                                self.unified_processor.s3vector_service.put_vectors_batch(
+                                    vector_bucket_name, index_name, result.vectors
+                                )
+                            else:
+                                # Large file - chunk into batch_size pieces
+                                for i in range(0, file_vector_count, batch_size):
+                                    chunk = result.vectors[i:i + batch_size]
+                                    self.unified_processor.s3vector_service.put_vectors_batch(
+                                        vector_bucket_name, index_name, chunk
+                                    )
+                            
+                            processed_files_count += 1  # Count files, not vectors
+                            processed_keys.extend([v.get("key", "") for v in result.vectors])
+                            
+                            print(f"[{completed_files}/{total_files}] Stored {file_vector_count} vectors from {file_path}")
+                            
+                        except Exception as e:
+                            failed_files_count += 1
+                            errors.append(f"Storage failed for {file_path}: {str(e)}")
+                            
+                    else:
+                        failed_files_count += 1
+                        errors.append(f"No vectors generated for {file_path}")
+                        
+                except Exception as e:
+                    failed_files_count += 1
+                    errors.append(f"Error processing {file_path}: {str(e)}")
+        
+        return processed_files_count, failed_files_count, processed_keys, errors
