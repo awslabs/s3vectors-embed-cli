@@ -120,11 +120,41 @@ s3vectors-embed put \
   --bedrock-inference-params '{"normalize": false}'
 ```
 
+8. **Use custom vector key:**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.titan-embed-text-v2:0 \
+  --text-value "Sample text" \
+  --key "doc-001"
+```
+
+9. **Use S3 object key as vector key:**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.titan-embed-text-v2:0 \
+  --text "s3://my-bucket/documents/report.txt" \
+  --use-object-key-name
+```
+
+10. **Use filename as vector key for batch processing:**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.titan-embed-text-v2:0 \
+  --text "./documents/*.txt" \
+  --use-object-key-name
+```
+
 #### ** Examples for the TwelveLabs Marengo Embedding Model (Async Processing)**
 
 **Note:** For the TwelveLabs model (`twelvelabs.marengo-embed-2-7-v1:0`), Bedrock processes data asynchronously and first stores the embedding output in a general purpose S3 bucket that you specify. 
 
-7. **TwelveLabs embeddings for text data :**
+11. **TwelveLabs embeddings for text data :**
 ```bash
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
@@ -134,7 +164,7 @@ s3vectors-embed put \
   --async-output-s3-uri s3://my-async-bucket
 ```
 
-8. **TwelveLabs embeddings for a local video file (up to 36MB for TwelveLabs models):**
+12. **TwelveLabs embeddings for a local video file (up to 36MB for TwelveLabs models):**
 ```bash
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
@@ -145,7 +175,7 @@ s3vectors-embed put \
   --bedrock-inference-params '{"useFixedLengthSec": 5, "minClipSec": 2, "embeddingOption": ["visual-text", "audio"]}'
 ```
 
-9. **TwelveLabs embeddings for an S3 URI video input (up to 2GB, recommended for large files):**
+13. **TwelveLabs embeddings for an S3 URI video input (up to 2GB, recommended for large files):**
 ```bash
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
@@ -157,7 +187,7 @@ s3vectors-embed put \
   --src-bucket-owner 123456789012  # Optional: only needed for cross-account access
 ```
 
-10. **TwelveLabs embeddings for a local audio file:**
+14. **TwelveLabs embeddings for a local audio file:**
 ```bash
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
@@ -168,7 +198,7 @@ s3vectors-embed put \
   --bedrock-inference-params '{"startSec": 10.0, "lengthSec": 30.0}'
 ```
 
-11. **TwelveLabs embeddings for an S3 URI audio input:**
+15. **TwelveLabs embeddings for an S3 URI audio input:**
 ```bash
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
@@ -180,7 +210,7 @@ s3vectors-embed put \
   --src-bucket-owner 123456789012  # Optional: only needed for cross-account access
 ```
 
-12. **TwelveLabs image embeddings:**
+16. **TwelveLabs image embeddings:**
 ```bash
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
@@ -190,7 +220,7 @@ s3vectors-embed put \
   --async-output-s3-uri s3://my-async-bucket
 ```
 
-13. **TwelveLabs embeddings for a video file using additional options:**
+17. **TwelveLabs embeddings for a video file using additional options:**
 ```bash
 s3vectors-embed put \
   --vector-bucket-name my-bucket \
@@ -408,6 +438,7 @@ Input Options (one required):
 
 Optional:
 - `--key`: Uniquely identifies each vector in the vector index (default: auto-generated UUID)
+- `--use-object-key-name`: Use S3 object key or filename as vector key (mutually exclusive with --key)
 - `--metadata`: Additional metadata associated with the vector; provided as JSON string
 - `--bedrock-inference-params`: Model-specific parameters passed to Bedrock (JSON format, e.g., `'{"normalize": false}'`)
 - `--src-bucket-owner`: AWS account ID for cross-account S3 access to input files (optional, only needed when input S3 files are in a different AWS account)
@@ -687,6 +718,62 @@ Valid parameters include: startSec, lengthSec, useFixedLengthSec, embeddingOptio
 2. **Quotes**: Use single quotes around the entire filter and double quotes inside JSON
 3. **Case Sensitivity**: String comparisons are case-sensitive
 3. **Data Types**: Ensure filter values match the data types in your metadata
+
+## Vector Key Management
+
+The CLI provides flexible options for managing vector keys (unique identifiers) in your S3 Vector index:
+
+### **Key Generation Options**
+
+#### **1. Auto-Generated UUID (Default)**
+```bash
+s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
+  --model-id amazon.titan-embed-text-v2:0 --text-value "Hello world"
+# Result: key = "abc123-def456-ghi789" (UUID)
+```
+
+#### **2. Custom Key (`--key`)**
+```bash
+s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
+  --model-id amazon.titan-embed-text-v2:0 --text-value "Hello world" --key "doc-001"
+# Result: key = "doc-001"
+```
+
+#### **3. Object-Based Key (`--use-object-key-name`)**
+
+**S3 Files:**
+```bash
+s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
+  --model-id amazon.titan-embed-text-v2:0 --text "s3://bucket/docs/report.txt" --use-object-key-name
+# Result: key = "docs/report.txt" (S3 object key)
+```
+
+**Local Files:**
+```bash
+s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
+  --model-id amazon.titan-embed-text-v2:0 --text "./documents/report.txt" --use-object-key-name
+# Result: key = "report.txt" (filename)
+```
+
+**Batch Processing:**
+```bash
+s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
+  --model-id amazon.titan-embed-text-v2:0 --text "s3://bucket/docs/*" --use-object-key-name
+# Result: Each file gets its S3 object key as vector key
+```
+
+### **Key Parameter Rules**
+
+- **Mutual Exclusivity**: Cannot use both `--key` and `--use-object-key-name`
+- **Single Operations Only**: `--key` works with single files/text only
+- **Not for Multi-Vector**: Both parameters rejected for video/audio (generate multiple vectors)
+- **Text-Value Limitation**: `--use-object-key-name` not allowed with `--text-value` (no file to extract name from)
+
+### **Use Cases**
+
+- **`--key`**: When you need specific, meaningful identifiers (e.g., document IDs, product codes)
+- **`--use-object-key-name`**: When you want to preserve file/object names for easy identification
+- **Default UUID**: When unique identification is sufficient and you don't need meaningful names
 
 ## Metadata
 

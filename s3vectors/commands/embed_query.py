@@ -200,8 +200,8 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
         except Exception as e:
             raise click.ClickException(f"Failed to get index information: {str(e)}")
         
-        # Create ProcessingInput
-        processing_input = prepare_processing_input(text_value, text, image, video, audio, is_multimodal)
+        # Create ProcessingInput (no metadata, keys, or object naming for queries)
+        processing_input = prepare_processing_input(text_value, text, image, video, audio, is_multimodal, None, None, False)
         
         # Process query input to generate embedding (same as PUT)
         with console.status("[bold green]Generating query embedding..."):

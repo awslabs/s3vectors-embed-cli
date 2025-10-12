@@ -1,5 +1,7 @@
 """Model definitions and capabilities for S3 Vectors CLI."""
 
+import uuid
+from pathlib import Path
 from enum import Enum
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
@@ -14,6 +16,8 @@ class ProcessingInput:
     data: Dict[str, Any]  # Content data
     source_location: str  # Original source location
     metadata: Dict[str, Any]  # Base metadata
+    custom_key: Optional[str] = None  # Custom vector key
+    use_object_key_name: bool = False  # Use object key/filename as vector key
 
 
 def determine_content_type(text_value, text, image, video, audio, is_multimodal=False) -> str:
@@ -31,7 +35,7 @@ def determine_content_type(text_value, text, image, video, audio, is_multimodal=
     raise ValueError("No input type specified")
 
 
-def prepare_processing_input(text_value, text, image, video, audio, is_multimodal, metadata_dict=None) -> ProcessingInput:
+def prepare_processing_input(text_value, text, image, video, audio, is_multimodal, metadata_dict=None, custom_key=None, use_object_key_name=False) -> ProcessingInput:
     """Prepare unified processing input for both PUT and QUERY operations."""
     metadata = metadata_dict or {}
     
@@ -40,42 +44,54 @@ def prepare_processing_input(text_value, text, image, video, audio, is_multimoda
             content_type="multimodal",
             data={"multimodal": {"text": text_value, "image_path": image}},
             source_location=image,  # Use image path as primary source location
-            metadata=metadata
+            metadata=metadata,
+            custom_key=custom_key,
+            use_object_key_name=use_object_key_name
         )
     elif text_value:
         return ProcessingInput(
             content_type="text",
             data={"text": text_value},
             source_location="direct_text_input",
-            metadata=metadata
+            metadata=metadata,
+            custom_key=custom_key,
+            use_object_key_name=use_object_key_name
         )
     elif text:
         return ProcessingInput(
             content_type="text",
             data={"file_path": text},
             source_location=text,
-            metadata=metadata
+            metadata=metadata,
+            custom_key=custom_key,
+            use_object_key_name=use_object_key_name
         )
     elif image:
         return ProcessingInput(
             content_type="image",
             data={"file_path": image},
             source_location=image,
-            metadata=metadata
+            metadata=metadata,
+            custom_key=custom_key,
+            use_object_key_name=use_object_key_name
         )
     elif video:
         return ProcessingInput(
             content_type="video",
             data={"file_path": video},
             source_location=video,
-            metadata=metadata
+            metadata=metadata,
+            custom_key=custom_key,
+            use_object_key_name=use_object_key_name
         )
     elif audio:
         return ProcessingInput(
             content_type="audio",
             data={"file_path": audio},
             source_location=audio,
-            metadata=metadata
+            metadata=metadata,
+            custom_key=custom_key,
+            use_object_key_name=use_object_key_name
         )
     else:
         raise click.ClickException("No valid input provided")
@@ -394,3 +410,24 @@ def validate_model_modality(model_id: str, modality: str) -> None:
             f"Model {model_id} does not support {modality} input. "
             f"Supported modalities: {supported}"
         )
+
+
+def generate_vector_key(custom_key: Optional[str], use_object_key_name: bool, source_location: str) -> str:
+    """Generate vector key based on parameters and source location."""
+    if custom_key:
+        return custom_key
+    elif use_object_key_name:
+        return extract_key_from_source(source_location)
+    else:
+        return str(uuid.uuid4())
+
+
+def extract_key_from_source(source_location: str) -> str:
+    """Extract key from source location (S3 URI or local path)."""
+    if source_location.startswith('s3://'):
+        # Extract S3 object key (everything after bucket name)
+        parts = source_location[5:].split('/', 1)  # Remove 's3://' and split
+        return parts[1] if len(parts) > 1 else parts[0]
+    else:
+        # Extract filename from local path
+        return Path(source_location).name
