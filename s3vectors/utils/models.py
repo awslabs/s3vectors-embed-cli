@@ -425,9 +425,8 @@ def generate_vector_key(custom_key: Optional[str], use_object_key_name: bool, so
 def extract_key_from_source(source_location: str) -> str:
     """Extract key from source location (S3 URI or local path)."""
     if source_location.startswith('s3://'):
-        # Extract S3 object key (everything after bucket name)
-        parts = source_location[5:].split('/', 1)  # Remove 's3://' and split
-        return parts[1] if len(parts) > 1 else parts[0]
+        # Use full S3 URI as key for complete traceability
+        return source_location
     else:
-        # Extract filename from local path
-        return Path(source_location).name
+        # Use full absolute path for local files to ensure uniqueness
+        return str(Path(source_location).resolve())

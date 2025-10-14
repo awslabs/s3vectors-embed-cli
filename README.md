@@ -438,7 +438,7 @@ Input Options (one required):
 
 Optional:
 - `--key`: Uniquely identifies each vector in the vector index (default: auto-generated UUID)
-- `--use-object-key-name`: Use S3 object key or filename as vector key (mutually exclusive with --key)
+- `--use-object-key-name`: Use full S3 URI or absolute file path as vector key (mutually exclusive with --key)
 - `--metadata`: Additional metadata associated with the vector; provided as JSON string
 - `--bedrock-inference-params`: Model-specific parameters passed to Bedrock (JSON format, e.g., `'{"normalize": false}'`)
 - `--src-bucket-owner`: AWS account ID for cross-account S3 access to input files (optional, only needed when input S3 files are in a different AWS account)
@@ -745,21 +745,21 @@ s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
 ```bash
 s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
   --model-id amazon.titan-embed-text-v2:0 --text "s3://bucket/docs/report.txt" --use-object-key-name
-# Result: key = "docs/report.txt" (S3 object key)
+# Result: key = "s3://bucket/docs/report.txt" (full S3 URI)
 ```
 
 **Local Files:**
 ```bash
 s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
   --model-id amazon.titan-embed-text-v2:0 --text "./documents/report.txt" --use-object-key-name
-# Result: key = "report.txt" (filename)
+# Result: key = "/full/absolute/path/to/documents/report.txt" (full absolute path)
 ```
 
 **Batch Processing:**
 ```bash
 s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
   --model-id amazon.titan-embed-text-v2:0 --text "s3://bucket/docs/*" --use-object-key-name
-# Result: Each file gets its S3 object key as vector key
+# Result: Each file gets its full S3 URI as vector key
 ```
 
 ### **Key Parameter Rules**
@@ -772,7 +772,7 @@ s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
 ### **Use Cases**
 
 - **`--key`**: When you need specific, meaningful identifiers (e.g., document IDs, product codes)
-- **`--use-object-key-name`**: When you want to preserve file/object names for easy identification
+- **`--use-object-key-name`**: When you want to preserve full file paths/URIs for complete traceability
 - **Default UUID**: When unique identification is sufficient and you don't need meaningful names
 
 ## Metadata
