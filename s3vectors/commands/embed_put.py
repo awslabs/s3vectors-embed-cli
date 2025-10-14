@@ -61,6 +61,7 @@ def _validate_inputs(text_value, text, image, video, audio, model, key, use_obje
 @click.option('--async-output-s3-uri', help='S3 URI for async processing results')
 @click.option('--bedrock-inference-params', help='Bedrock inference parameters (JSON)')
 @click.option('--key', help='Custom vector key (auto-generated UUID if not provided)')
+@click.option('--key-prefix', help='Prefix to prepend to all vector keys')
 @click.option('--use-object-key-name', is_flag=True, help='Use S3 object key or filename as vector key')
 @click.option('--metadata', help='Additional metadata (JSON)')
 @click.option('--src-bucket-owner', help='AWS account ID for cross-account S3 access')
@@ -70,7 +71,7 @@ def _validate_inputs(text_value, text, image, video, audio, model, key, use_obje
 @click.option('--region', help='AWS region')
 @click.pass_context
 def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, image,
-                     video, audio, async_output_s3_uri, bedrock_inference_params, key, use_object_key_name,
+                     video, audio, async_output_s3_uri, bedrock_inference_params, key, key_prefix, use_object_key_name,
                      metadata, src_bucket_owner, max_workers, batch_size, output, region):
     """Unified embed and store vectors command."""
     
@@ -143,7 +144,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
         
         # Prepare processing input
         processing_input = prepare_processing_input(
-            text_value, text, image, video, audio, is_multimodal, metadata_dict, key, use_object_key_name
+            text_value, text, image, video, audio, is_multimodal, metadata_dict, key, use_object_key_name, key_prefix
         )
         
         # Check for wildcard patterns (streaming batch processing)
@@ -153,7 +154,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
                 return _process_streaming_batch(
                     file_path, processing_input.content_type, vector_bucket_name, index_name,
                     model, metadata_dict, user_bedrock_params, async_output_s3_uri, 
-                    src_bucket_owner, processor, console, output, max_workers, batch_size, index_dimensions, processing_input.use_object_key_name
+                    src_bucket_owner, processor, console, output, max_workers, batch_size, index_dimensions, processing_input.use_object_key_name, processing_input.key_prefix
                 )
         
         with _create_progress_context(console) as progress:
@@ -216,7 +217,7 @@ if __name__ == '__main__':
 
 def _process_streaming_batch(file_path, content_type, vector_bucket_name, index_name,
                            model, metadata_dict, user_bedrock_params, async_output_s3_uri,
-                           src_bucket_owner, processor, console, output, max_workers, batch_size, index_dimensions, use_object_key_name):
+                           src_bucket_owner, processor, console, output, max_workers, batch_size, index_dimensions, use_object_key_name, key_prefix):
     """Process wildcard pattern using efficient streaming batch orchestrator."""
 
     
@@ -229,7 +230,7 @@ def _process_streaming_batch(file_path, content_type, vector_bucket_name, index_
         # Process using streaming approach (no pre-loading of file paths)
         batch_result = streaming_orchestrator.process_streaming_batch(
             file_path, content_type, vector_bucket_name, index_name, model,
-            metadata_dict, async_output_s3_uri, src_bucket_owner, user_bedrock_params, index_dimensions, use_object_key_name
+            metadata_dict, async_output_s3_uri, src_bucket_owner, user_bedrock_params, index_dimensions, use_object_key_name, key_prefix
         )
         
         # Display results

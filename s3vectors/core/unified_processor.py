@@ -225,13 +225,13 @@ class UnifiedProcessor:
             # Generate vector key based on processing input preferences
             if processing_input.custom_key and len(raw_results) == 1:
                 # Use custom key only for single vector results
-                vector_key = processing_input.custom_key
+                vector_key = generate_vector_key(processing_input.custom_key, False, processing_input.source_location, processing_input.key_prefix)
             elif processing_input.use_object_key_name and len(raw_results) == 1:
                 # Use object key/filename only for single vector results
-                vector_key = generate_vector_key(None, True, processing_input.source_location)
+                vector_key = generate_vector_key(None, True, processing_input.source_location, processing_input.key_prefix)
             else:
                 # Generate UUID for multi-vector results or when no key preference specified
-                vector_key = str(uuid.uuid4())
+                vector_key = generate_vector_key(None, False, processing_input.source_location, processing_input.key_prefix)
             
             # Prepare metadata
             vector_metadata = processing_input.metadata.copy()

@@ -18,6 +18,7 @@ class ProcessingInput:
     metadata: Dict[str, Any]  # Base metadata
     custom_key: Optional[str] = None  # Custom vector key
     use_object_key_name: bool = False  # Use object key/filename as vector key
+    key_prefix: Optional[str] = None  # Prefix to prepend to all vector keys
 
 
 def determine_content_type(text_value, text, image, video, audio, is_multimodal=False) -> str:
@@ -35,7 +36,7 @@ def determine_content_type(text_value, text, image, video, audio, is_multimodal=
     raise ValueError("No input type specified")
 
 
-def prepare_processing_input(text_value, text, image, video, audio, is_multimodal, metadata_dict=None, custom_key=None, use_object_key_name=False) -> ProcessingInput:
+def prepare_processing_input(text_value, text, image, video, audio, is_multimodal, metadata_dict=None, custom_key=None, use_object_key_name=False, key_prefix=None) -> ProcessingInput:
     """Prepare unified processing input for both PUT and QUERY operations."""
     metadata = metadata_dict or {}
     
@@ -46,7 +47,8 @@ def prepare_processing_input(text_value, text, image, video, audio, is_multimoda
             source_location=image,  # Use image path as primary source location
             metadata=metadata,
             custom_key=custom_key,
-            use_object_key_name=use_object_key_name
+            use_object_key_name=use_object_key_name,
+            key_prefix=key_prefix
         )
     elif text_value:
         return ProcessingInput(
@@ -55,7 +57,8 @@ def prepare_processing_input(text_value, text, image, video, audio, is_multimoda
             source_location="direct_text_input",
             metadata=metadata,
             custom_key=custom_key,
-            use_object_key_name=use_object_key_name
+            use_object_key_name=use_object_key_name,
+            key_prefix=key_prefix
         )
     elif text:
         return ProcessingInput(
@@ -64,7 +67,8 @@ def prepare_processing_input(text_value, text, image, video, audio, is_multimoda
             source_location=text,
             metadata=metadata,
             custom_key=custom_key,
-            use_object_key_name=use_object_key_name
+            use_object_key_name=use_object_key_name,
+            key_prefix=key_prefix
         )
     elif image:
         return ProcessingInput(
@@ -73,7 +77,8 @@ def prepare_processing_input(text_value, text, image, video, audio, is_multimoda
             source_location=image,
             metadata=metadata,
             custom_key=custom_key,
-            use_object_key_name=use_object_key_name
+            use_object_key_name=use_object_key_name,
+            key_prefix=key_prefix
         )
     elif video:
         return ProcessingInput(
@@ -82,7 +87,8 @@ def prepare_processing_input(text_value, text, image, video, audio, is_multimoda
             source_location=video,
             metadata=metadata,
             custom_key=custom_key,
-            use_object_key_name=use_object_key_name
+            use_object_key_name=use_object_key_name,
+            key_prefix=key_prefix
         )
     elif audio:
         return ProcessingInput(
@@ -91,7 +97,8 @@ def prepare_processing_input(text_value, text, image, video, audio, is_multimoda
             source_location=audio,
             metadata=metadata,
             custom_key=custom_key,
-            use_object_key_name=use_object_key_name
+            use_object_key_name=use_object_key_name,
+            key_prefix=key_prefix
         )
     else:
         raise click.ClickException("No valid input provided")
@@ -412,21 +419,29 @@ def validate_model_modality(model_id: str, modality: str) -> None:
         )
 
 
-def generate_vector_key(custom_key: Optional[str], use_object_key_name: bool, source_location: str) -> str:
+def generate_vector_key(custom_key: Optional[str], use_object_key_name: bool, source_location: str, key_prefix: Optional[str] = None) -> str:
     """Generate vector key based on parameters and source location."""
     if custom_key:
-        return custom_key
+        base_key = custom_key
     elif use_object_key_name:
-        return extract_key_from_source(source_location)
+        base_key = extract_key_from_source(source_location)
     else:
-        return str(uuid.uuid4())
+        base_key = str(uuid.uuid4())
+    
+    # Apply key prefix if provided
+    if key_prefix:
+        return f"{key_prefix}{base_key}"
+    else:
+        return base_key
 
 
 def extract_key_from_source(source_location: str) -> str:
     """Extract key from source location (S3 URI or local path)."""
     if source_location.startswith('s3://'):
-        # Use full S3 URI as key for complete traceability
-        return source_location
+        # Extract filename from S3 object key
+        parts = source_location[5:].split('/', 1)  # Remove 's3://' and split
+        object_key = parts[1] if len(parts) > 1 else parts[0]
+        return Path(object_key).name  # Get filename from object key
     else:
-        # Use full absolute path for local files to ensure uniqueness
-        return str(Path(source_location).resolve())
+        # Extract filename from local path
+        return Path(source_location).name
