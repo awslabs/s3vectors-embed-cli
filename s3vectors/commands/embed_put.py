@@ -20,7 +20,7 @@ def _create_progress_context(console):
     )
 
 
-def _validate_inputs(text_value, text, image, video, audio, model, key, use_object_key_name):
+def _validate_inputs(text_value, text, image, video, audio, model, key, filename_as_key):
     """Validate input parameters."""
     inputs_provided = sum(bool(x) for x in [text_value, text, image, video, audio])
     
@@ -28,16 +28,16 @@ def _validate_inputs(text_value, text, image, video, audio, model, key, use_obje
         raise click.ClickException("At least one input must be provided: --text-value, --text, --image, --video, or --audio")
     
     # Check mutual exclusivity of key parameters
-    if key and use_object_key_name:
-        raise click.ClickException("Cannot use both --key and --use-object-key-name. Choose one.")
+    if key and filename_as_key:
+        raise click.ClickException("Cannot use both --key and --filename-as-key. Choose one.")
     
-    # --use-object-key-name not allowed with --text-value (no file/object to extract name from)
-    if use_object_key_name and text_value:
-        raise click.ClickException("--use-object-key-name is not supported with --text-value (no file or object to extract name from)")
+    # --filename-as-key not allowed with --text-value (no file/object to extract name from)
+    if filename_as_key and text_value:
+        raise click.ClickException("--filename-as-key is not supported with --text-value (no file or object to extract name from)")
     
     # Key parameters not supported for video/audio (multi-vector output)
-    if (key or use_object_key_name) and (video or audio):
-        raise click.ClickException("--key and --use-object-key-name are not supported for video/audio inputs (multi-vector output)")
+    if (key or filename_as_key) and (video or audio):
+        raise click.ClickException("--key and --filename-as-key are not supported for video/audio inputs (multi-vector output)")
     
     # Special case: Allow multimodal input for supported models
     is_multimodal_input = (model.supports_multimodal_input() and 
@@ -62,7 +62,7 @@ def _validate_inputs(text_value, text, image, video, audio, model, key, use_obje
 @click.option('--bedrock-inference-params', help='Bedrock inference parameters (JSON)')
 @click.option('--key', help='Custom vector key (auto-generated UUID if not provided)')
 @click.option('--key-prefix', help='Prefix to prepend to all vector keys')
-@click.option('--use-object-key-name', is_flag=True, help='Use S3 object key or filename as vector key')
+@click.option('--filename-as-key', is_flag=True, help='Use filename as vector key')
 @click.option('--metadata', help='Additional metadata (JSON)')
 @click.option('--src-bucket-owner', help='AWS account ID for cross-account S3 access')
 @click.option('--max-workers', type=int, default=4, help='Maximum parallel workers for batch processing')
@@ -71,7 +71,7 @@ def _validate_inputs(text_value, text, image, video, audio, model, key, use_obje
 @click.option('--region', help='AWS region')
 @click.pass_context
 def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, image,
-                     video, audio, async_output_s3_uri, bedrock_inference_params, key, key_prefix, use_object_key_name,
+                     video, audio, async_output_s3_uri, bedrock_inference_params, key, key_prefix, filename_as_key,
                      metadata, src_bucket_owner, max_workers, batch_size, output, region):
     """Unified embed and store vectors command."""
     
@@ -123,7 +123,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
         )
     
     # Validate inputs
-    is_multimodal = _validate_inputs(text_value, text, image, video, audio, model, key, use_object_key_name)
+    is_multimodal = _validate_inputs(text_value, text, image, video, audio, model, key, filename_as_key)
     
     try:
         # Initialize services
@@ -144,7 +144,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
         
         # Prepare processing input
         processing_input = prepare_processing_input(
-            text_value, text, image, video, audio, is_multimodal, metadata_dict, key, use_object_key_name, key_prefix
+            text_value, text, image, video, audio, is_multimodal, metadata_dict, key, filename_as_key, key_prefix
         )
         
         # Check for wildcard patterns (streaming batch processing)
@@ -154,7 +154,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
                 return _process_streaming_batch(
                     file_path, processing_input.content_type, vector_bucket_name, index_name,
                     model, metadata_dict, user_bedrock_params, async_output_s3_uri, 
-                    src_bucket_owner, processor, console, output, max_workers, batch_size, index_dimensions, processing_input.use_object_key_name, processing_input.key_prefix
+                    src_bucket_owner, processor, console, output, max_workers, batch_size, index_dimensions, processing_input.filename_as_key, processing_input.key_prefix
                 )
         
         with _create_progress_context(console) as progress:
@@ -217,7 +217,7 @@ if __name__ == '__main__':
 
 def _process_streaming_batch(file_path, content_type, vector_bucket_name, index_name,
                            model, metadata_dict, user_bedrock_params, async_output_s3_uri,
-                           src_bucket_owner, processor, console, output, max_workers, batch_size, index_dimensions, use_object_key_name, key_prefix):
+                           src_bucket_owner, processor, console, output, max_workers, batch_size, index_dimensions, filename_as_key, key_prefix):
     """Process wildcard pattern using efficient streaming batch orchestrator."""
 
     
@@ -230,7 +230,7 @@ def _process_streaming_batch(file_path, content_type, vector_bucket_name, index_
         # Process using streaming approach (no pre-loading of file paths)
         batch_result = streaming_orchestrator.process_streaming_batch(
             file_path, content_type, vector_bucket_name, index_name, model,
-            metadata_dict, async_output_s3_uri, src_bucket_owner, user_bedrock_params, index_dimensions, use_object_key_name, key_prefix
+            metadata_dict, async_output_s3_uri, src_bucket_owner, user_bedrock_params, index_dimensions, filename_as_key, key_prefix
         )
         
         # Display results

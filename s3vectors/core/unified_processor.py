@@ -226,7 +226,7 @@ class UnifiedProcessor:
             if processing_input.custom_key and len(raw_results) == 1:
                 # Use custom key only for single vector results
                 vector_key = generate_vector_key(processing_input.custom_key, False, processing_input.source_location, processing_input.key_prefix)
-            elif processing_input.use_object_key_name and len(raw_results) == 1:
+            elif processing_input.filename_as_key and len(raw_results) == 1:
                 # Use object key/filename only for single vector results
                 vector_key = generate_vector_key(None, True, processing_input.source_location, processing_input.key_prefix)
             else:

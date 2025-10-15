@@ -17,7 +17,7 @@ class ProcessingInput:
     source_location: str  # Original source location
     metadata: Dict[str, Any]  # Base metadata
     custom_key: Optional[str] = None  # Custom vector key
-    use_object_key_name: bool = False  # Use object key/filename as vector key
+    filename_as_key: bool = False  # Use filename as vector key
     key_prefix: Optional[str] = None  # Prefix to prepend to all vector keys
 
 
@@ -36,7 +36,7 @@ def determine_content_type(text_value, text, image, video, audio, is_multimodal=
     raise ValueError("No input type specified")
 
 
-def prepare_processing_input(text_value, text, image, video, audio, is_multimodal, metadata_dict=None, custom_key=None, use_object_key_name=False, key_prefix=None) -> ProcessingInput:
+def prepare_processing_input(text_value, text, image, video, audio, is_multimodal, metadata_dict=None, custom_key=None, filename_as_key=False, key_prefix=None) -> ProcessingInput:
     """Prepare unified processing input for both PUT and QUERY operations."""
     metadata = metadata_dict or {}
     
@@ -47,7 +47,7 @@ def prepare_processing_input(text_value, text, image, video, audio, is_multimoda
             source_location=image,  # Use image path as primary source location
             metadata=metadata,
             custom_key=custom_key,
-            use_object_key_name=use_object_key_name,
+            filename_as_key=filename_as_key,
             key_prefix=key_prefix
         )
     elif text_value:
@@ -57,7 +57,7 @@ def prepare_processing_input(text_value, text, image, video, audio, is_multimoda
             source_location="direct_text_input",
             metadata=metadata,
             custom_key=custom_key,
-            use_object_key_name=use_object_key_name,
+            filename_as_key=filename_as_key,
             key_prefix=key_prefix
         )
     elif text:
@@ -67,7 +67,7 @@ def prepare_processing_input(text_value, text, image, video, audio, is_multimoda
             source_location=text,
             metadata=metadata,
             custom_key=custom_key,
-            use_object_key_name=use_object_key_name,
+            filename_as_key=filename_as_key,
             key_prefix=key_prefix
         )
     elif image:
@@ -77,7 +77,7 @@ def prepare_processing_input(text_value, text, image, video, audio, is_multimoda
             source_location=image,
             metadata=metadata,
             custom_key=custom_key,
-            use_object_key_name=use_object_key_name,
+            filename_as_key=filename_as_key,
             key_prefix=key_prefix
         )
     elif video:
@@ -87,7 +87,7 @@ def prepare_processing_input(text_value, text, image, video, audio, is_multimoda
             source_location=video,
             metadata=metadata,
             custom_key=custom_key,
-            use_object_key_name=use_object_key_name,
+            filename_as_key=filename_as_key,
             key_prefix=key_prefix
         )
     elif audio:
@@ -97,7 +97,7 @@ def prepare_processing_input(text_value, text, image, video, audio, is_multimoda
             source_location=audio,
             metadata=metadata,
             custom_key=custom_key,
-            use_object_key_name=use_object_key_name,
+            filename_as_key=filename_as_key,
             key_prefix=key_prefix
         )
     else:

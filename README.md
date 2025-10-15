@@ -137,7 +137,7 @@ s3vectors-embed put \
   --index-name my-index \
   --model-id amazon.titan-embed-text-v2:0 \
   --text "s3://my-bucket/documents/report.txt" \
-  --use-object-key-name
+  --filename-as-key
 ```
 
 10. **Use filename as vector key for batch processing:**
@@ -147,7 +147,7 @@ s3vectors-embed put \
   --index-name my-index \
   --model-id amazon.titan-embed-text-v2:0 \
   --text "./documents/*.txt" \
-  --use-object-key-name
+  --filename-as-key
 ```
 
 11. **Use key prefix with custom key:**
@@ -168,7 +168,7 @@ s3vectors-embed put \
   --index-name my-index \
   --model-id amazon.titan-embed-text-v2:0 \
   --text "./documents/report.txt" \
-  --use-object-key-name \
+  --filename-as-key \
   --key-prefix "docs/"
 ```
 
@@ -460,8 +460,8 @@ Input Options (one required):
 
 Optional:
 - `--key`: Uniquely identifies each vector in the vector index (default: auto-generated UUID)
-- `--key-prefix`: Prefix to prepend to all vector keys (works with --key, --use-object-key-name, and auto-generated UUIDs)
-- `--use-object-key-name`: Use filename as vector key (mutually exclusive with --key)
+- `--key-prefix`: Prefix to prepend to all vector keys (works with --key, --filename-as-key, and auto-generated UUIDs)
+- `--filename-as-key`: Use filename as vector key (mutually exclusive with --key)
 - `--metadata`: Additional metadata associated with the vector; provided as JSON string
 - `--bedrock-inference-params`: Model-specific parameters passed to Bedrock (JSON format, e.g., `'{"normalize": false}'`)
 - `--src-bucket-owner`: AWS account ID for cross-account S3 access to input files (optional, only needed when input S3 files are in a different AWS account)
@@ -762,26 +762,26 @@ s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
 # Result: key = "doc-001"
 ```
 
-#### **3. Object-Based Key (`--use-object-key-name`)**
+#### **3. Object-Based Key (`--filename-as-key`)**
 
 **S3 Files:**
 ```bash
 s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
-  --model-id amazon.titan-embed-text-v2:0 --text "s3://bucket/docs/report.txt" --use-object-key-name
+  --model-id amazon.titan-embed-text-v2:0 --text "s3://bucket/docs/report.txt" --filename-as-key
 # Result: key = "report.txt" (filename only)
 ```
 
 **Local Files:**
 ```bash
 s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
-  --model-id amazon.titan-embed-text-v2:0 --text "./documents/report.txt" --use-object-key-name
+  --model-id amazon.titan-embed-text-v2:0 --text "./documents/report.txt" --filename-as-key
 # Result: key = "report.txt" (filename only)
 ```
 
 **Batch Processing:**
 ```bash
 s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
-  --model-id amazon.titan-embed-text-v2:0 --text "s3://bucket/docs/*" --use-object-key-name
+  --model-id amazon.titan-embed-text-v2:0 --text "s3://bucket/docs/*" --filename-as-key
 # Result: Each file gets its filename as vector key
 ```
 
@@ -797,7 +797,7 @@ s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
 **Object Key with Prefix:**
 ```bash
 s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
-  --model-id amazon.titan-embed-text-v2:0 --text "./documents/report.txt" --use-object-key-name --key-prefix "docs/"
+  --model-id amazon.titan-embed-text-v2:0 --text "./documents/report.txt" --filename-as-key --key-prefix "docs/"
 # Result: key = "docs/report.txt"
 ```
 
@@ -810,16 +810,16 @@ s3vectors-embed put --vector-bucket-name my-bucket --index-name my-index \
 
 ### **Key Parameter Rules**
 
-- **Mutual Exclusivity**: Cannot use both `--key` and `--use-object-key-name`
+- **Mutual Exclusivity**: Cannot use both `--key` and `--filename-as-key`
 - **Single Operations Only**: `--key` works with single files/text only
 - **Not for Multi-Vector**: Both parameters rejected for video/audio (generate multiple vectors)
-- **Text-Value Limitation**: `--use-object-key-name` not allowed with `--text-value` (no file to extract name from)
+- **Text-Value Limitation**: `--filename-as-key` not allowed with `--text-value` (no file to extract name from)
 
 ### **Use Cases**
 
 - **`--key`**: When you need specific, meaningful identifiers (e.g., document IDs, product codes)
 - **`--key-prefix`**: When you want to organize vectors with consistent prefixes (e.g., "project-a/", "docs/", "temp/")
-- **`--use-object-key-name`**: When you want to preserve filenames for easy identification
+- **`--filename-as-key`**: When you want to preserve filenames for easy identification
 - **Default UUID**: When unique identification is sufficient and you don't need meaningful names
 
 ## Metadata

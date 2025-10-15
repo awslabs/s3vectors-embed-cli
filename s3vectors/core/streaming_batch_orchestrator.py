@@ -33,7 +33,7 @@ class StreamingBatchOrchestrator:
                                vector_bucket_name: str, index_name: str, model: SupportedModel,
                                metadata: Dict[str, Any], async_output_s3_uri: str = None,
                                src_bucket_owner: str = None, user_bedrock_params: Dict[str, Any] = None,
-                               index_dimensions: int = None, use_object_key_name: bool = False, key_prefix: str = None) -> BatchResult:
+                               index_dimensions: int = None, filename_as_key: bool = False, key_prefix: str = None) -> BatchResult:
         """Process files using streaming approach - no memory loading of all file paths."""
         
         # Detect processing strategy
@@ -50,7 +50,7 @@ class StreamingBatchOrchestrator:
             'async_output_s3_uri': async_output_s3_uri,
             'src_bucket_owner': src_bucket_owner,
             'batch_size': self.batch_size,
-            'use_object_key_name': use_object_key_name,
+            'filename_as_key': filename_as_key,
             'key_prefix': key_prefix
         }
         
@@ -265,7 +265,7 @@ class StreamingBatchOrchestrator:
                 # Create appropriate ProcessingInput - use file_path key for both S3 and local files
                 processing_input = ProcessingInput(
                     content_type, {"file_path": file_path}, file_path, metadata,
-                    use_object_key_name=batch_context['use_object_key_name'],
+                    filename_as_key=batch_context['filename_as_key'],
                     key_prefix=batch_context['key_prefix']
                 )
                 
@@ -341,7 +341,7 @@ class StreamingBatchOrchestrator:
             for file_path in chunk_files:
                 processing_input = ProcessingInput(
                     content_type, {"file_path": file_path}, file_path, metadata,
-                    use_object_key_name=batch_context['use_object_key_name'],
+                    filename_as_key=batch_context['filename_as_key'],
                     key_prefix=batch_context['key_prefix']
                 )
                 
