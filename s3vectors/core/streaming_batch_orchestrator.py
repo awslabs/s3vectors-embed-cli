@@ -33,7 +33,7 @@ class StreamingBatchOrchestrator:
                                vector_bucket_name: str, index_name: str, model: SupportedModel,
                                metadata: Dict[str, Any], async_output_s3_uri: str = None,
                                src_bucket_owner: str = None, user_bedrock_params: Dict[str, Any] = None,
-                               index_dimensions: int = None) -> BatchResult:
+                               index_dimensions: int = None, filename_as_key: bool = False, key_prefix: str = None) -> BatchResult:
         """Process files using streaming approach - no memory loading of all file paths."""
         
         # Detect processing strategy
@@ -49,7 +49,9 @@ class StreamingBatchOrchestrator:
             'user_bedrock_params': user_bedrock_params or {},
             'async_output_s3_uri': async_output_s3_uri,
             'src_bucket_owner': src_bucket_owner,
-            'batch_size': self.batch_size
+            'batch_size': self.batch_size,
+            'filename_as_key': filename_as_key,
+            'key_prefix': key_prefix
         }
         
         # Process using appropriate streaming method
@@ -261,7 +263,11 @@ class StreamingBatchOrchestrator:
             future_to_file = {}
             for file_path in chunk_files:
                 # Create appropriate ProcessingInput - use file_path key for both S3 and local files
-                processing_input = ProcessingInput(content_type, {"file_path": file_path}, file_path, metadata)
+                processing_input = ProcessingInput(
+                    content_type, {"file_path": file_path}, file_path, metadata,
+                    filename_as_key=batch_context['filename_as_key'],
+                    key_prefix=batch_context['key_prefix']
+                )
                 
                 future = executor.submit(
                     self.unified_processor.process,
@@ -333,7 +339,11 @@ class StreamingBatchOrchestrator:
             
             # Submit all files for async processing
             for file_path in chunk_files:
-                processing_input = ProcessingInput(content_type, {"file_path": file_path}, file_path, metadata)
+                processing_input = ProcessingInput(
+                    content_type, {"file_path": file_path}, file_path, metadata,
+                    filename_as_key=batch_context['filename_as_key'],
+                    key_prefix=batch_context['key_prefix']
+                )
                 
                 future = executor.submit(
                     self.unified_processor.process,

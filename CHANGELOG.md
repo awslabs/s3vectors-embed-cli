@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2025-01-12
+
+### Added
+- `--key` parameter for custom vector keys
+- `--use-object-key-name` flag to use S3 object key or filename as vector key
+- Vector key management documentation in README
+
+### Fixed
+- Table output format error for batch processing operations
+- Validation to prevent `--use-object-key-name` with `--text-value`
+
 ## [0.2.0] - 2025-01-XX
 
 ### Added

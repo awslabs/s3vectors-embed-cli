@@ -5,7 +5,7 @@ import base64
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
-from s3vectors.utils.models import get_model_info, SupportedModel, ProcessingInput
+from s3vectors.utils.models import get_model_info, SupportedModel, ProcessingInput, generate_vector_key
 from s3vectors.utils.multimodal_helpers import create_multimodal_metadata
 
 
@@ -222,8 +222,16 @@ class UnifiedProcessor:
             if not embedding:
                 raise ValueError(f"Missing required embedding in result {i+1}/{len(raw_results)}. Result: {result}")
             
-            # Generate unique key
-            vector_key = str(uuid.uuid4())
+            # Generate vector key based on processing input preferences
+            if processing_input.custom_key and len(raw_results) == 1:
+                # Use custom key only for single vector results
+                vector_key = generate_vector_key(processing_input.custom_key, False, processing_input.source_location, processing_input.key_prefix)
+            elif processing_input.filename_as_key and len(raw_results) == 1:
+                # Use object key/filename only for single vector results
+                vector_key = generate_vector_key(None, True, processing_input.source_location, processing_input.key_prefix)
+            else:
+                # Generate UUID for multi-vector results or when no key preference specified
+                vector_key = generate_vector_key(None, False, processing_input.source_location, processing_input.key_prefix)
             
             # Prepare metadata
             vector_metadata = processing_input.metadata.copy()
