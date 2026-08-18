@@ -21,8 +21,8 @@ Additionally, the `--query-input` parameter in the query command has been replac
 - **`--text-value`**: Direct text query string (preferred for text queries)
 - **`--text`**: Text file path (local file or S3 URI)
 - **`--image`**: Image file path (local file or S3 URI)
-- **`--video`**: Video file path (local file or S3 URI) - TwelveLabs models only
-- **`--audio`**: Audio file path (local file or S3 URI) - TwelveLabs models only
+- **`--video`**: Video file path (local file or S3 URI) - TwelveLabs and Nova models
+- **`--audio`**: Audio file path (local file or S3 URI) - TwelveLabs and Nova models
 
 ## Installation and Configuration
 ### Prerequisites
@@ -251,6 +251,98 @@ s3vectors-embed put \
   --bedrock-inference-params '{"embeddingOption": ["visual-text", "visual-image", "audio"], "useFixedLengthSec": 3, "minClipSec": 2, "startSec": 5.0, "lengthSec": 60.0}' \
   --metadata '{"source": "marketing", "campaign": "2024-q1"}' \
   --src-bucket-owner 123456789012  # Optional: only needed for cross-account access
+```
+
+#### ** Examples for the Amazon Nova Multimodal Embedding Model (Sync Processing)**
+
+**Note:** The Nova Multimodal Embeddings model (`amazon.nova-2-multimodal-embeddings-v1:0`) processes text, images, video (≤30s), and audio (≤30s) synchronously. It supports configurable dimensions (256, 384, 1024, 3072) and task-specific `embeddingPurpose` optimization. No async S3 bucket is required.
+
+20. **Nova text embeddings:**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --text-value "Amazon Nova generates high-quality multimodal embeddings"
+```
+
+21. **Nova text embeddings with custom truncation:**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --text-value "Long text content that may exceed token limits..." \
+  --bedrock-inference-params '{"truncationMode": "START"}'
+```
+
+22. **Nova image embeddings:**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --image "./photo.jpg"
+```
+
+23. **Nova document image embeddings (high-resolution for text-heavy images):**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --image "./invoice.png" \
+  --bedrock-inference-params '{"detailLevel": "DOCUMENT_IMAGE"}'
+```
+
+24. **Nova video embeddings (≤30 seconds, combined audio+video):**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --video "./clip.mp4"
+```
+
+25. **Nova video embeddings with separate audio and video embeddings:**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --video "./clip.mp4" \
+  --bedrock-inference-params '{"embeddingMode": "AUDIO_VIDEO_SEPARATE"}'
+```
+
+26. **Nova audio embeddings:**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --audio "./podcast-clip.mp3"
+```
+
+27. **Nova embeddings with metadata and custom embedding purpose:**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --image "./product.jpg" \
+  --metadata '{"category": "products", "brand": "acme"}' \
+  --bedrock-inference-params '{"embeddingPurpose": "GENERIC_INDEX", "detailLevel": "STANDARD_IMAGE"}'
+```
+
+28. **Nova batch processing for local image files:**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --image "./images/*.jpg" \
+  --metadata '{"source": "batch_upload"}' \
+  --max-workers 4
 ```
 
 #### **Query Examples**
@@ -557,6 +649,7 @@ s3vectors-embed query --vector-bucket-name my-bucket --index-name my-index \
 | `amazon.titan-embed-image-v1` | Multimodal (Text + Image) | 1024, 384, 256 | Text and image embedding | Sync |
 | `cohere.embed-english-v3` | Multimodal (Text or Image) | 1024 | Advanced English text or image embedding | Sync |
 | `cohere.embed-multilingual-v3` | Multimodal (Text or Image) | 1024 | Multilingual text or image embedding | Sync |
+| `amazon.nova-2-multimodal-embeddings-v1:0` | Multimodal (Text, Image, Video, Audio) | 3072, 1024, 384, 256 | Unified multimodal embedding with task-specific optimization | Sync |
 | `twelvelabs.marengo-embed-2-7-v1:0` | Multimodal (Video, Audio, Text, Image) | 1024 | Video and audio understanding | **Async** |
 
 **Note**: TwelveLabs models require async processing (~60 seconds) and an S3 general purpose bucket location to store the interim embedding results. 
@@ -600,6 +693,33 @@ s3vectors-embed query \
   --k 5
 ```
 
+##### **Nova Multimodal Models**
+```bash
+# Nova - Text with custom truncation mode
+s3vectors-embed put \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --text-value "Long text content..." \
+  --bedrock-inference-params '{"truncationMode": "START"}'
+
+# Nova - Image with document-level detail for text-heavy images
+s3vectors-embed put \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --image ./invoice.png \
+  --bedrock-inference-params '{"detailLevel": "DOCUMENT_IMAGE"}'
+
+# Nova - Video with separate audio and video embeddings
+s3vectors-embed put \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --video ./clip.mp4 \
+  --bedrock-inference-params '{"embeddingMode": "AUDIO_VIDEO_SEPARATE"}'
+
+# Nova - Query with retrieval-optimized embedding purpose
+s3vectors-embed query \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --text-value "search query" \
+  --bedrock-inference-params '{"embeddingPurpose": "TEXT_RETRIEVAL"}'
+```
+
 ##### **TwelveLabs Models**
 ```bash
 # TwelveLabs - Text truncation
@@ -624,6 +744,7 @@ s3vectors-embed put \
 | **Titan Text v1** | None (basic model) | N/A |
 | **Titan Image v1** | `normalize` | `false`|
 | **Cohere English/Multilingual** | `truncate` | `"END"`, `"NONE"` |
+| **Nova Multimodal** | `embeddingPurpose`, `truncationMode`, `detailLevel`, `embeddingMode` | `"GENERIC_INDEX"`, `"END"`, `"DOCUMENT_IMAGE"`, `"AUDIO_VIDEO_COMBINED"` |
 | **TwelveLabs Marengo** | `textTruncate`, `startSec`, `lengthSec`, `useFixedLengthSec`, `embeddingOption`, `minClipSec` | `"end"`, `30.0`, `60.0`, `5`, `["visual-text"]`, `2` |
 
 #### **Best Practices**

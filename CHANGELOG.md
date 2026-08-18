@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] - 2026-08-16
+
+### Added
+- Amazon Nova Multimodal Embeddings model support (`amazon.nova-2-multimodal-embeddings-v1:0`)
+- Text, image, video (≤30s), and audio (≤30s) embedding via synchronous processing
+- Configurable dimensions (256, 384, 1024, 3072) and task-specific `embeddingPurpose` optimization
+- Nova-specific parameters: `embeddingPurpose`, `truncationMode`, `detailLevel`, `embeddingMode`
 
 ## [0.2.1] - 2025-01-12
 

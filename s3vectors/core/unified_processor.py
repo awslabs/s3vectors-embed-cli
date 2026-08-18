@@ -97,21 +97,30 @@ class UnifiedProcessor:
                 # For sync models, read and encode image
                 base64_image = self._read_image_as_base64(file_path)
                 
-                # Set both formats to support different models:
-                # - Titan expects: {content.image_base64} (just base64 string)
-                # - Cohere expects: {content.image} (data URI format)
+                # Determine image format from extension
                 if file_path.lower().endswith(('.jpg', '.jpeg')):
                     mime_type = "image/jpeg"
+                    image_format = "jpeg"
                 elif file_path.lower().endswith('.png'):
                     mime_type = "image/png"
+                    image_format = "png"
+                elif file_path.lower().endswith('.gif'):
+                    mime_type = "image/gif"
+                    image_format = "gif"
+                elif file_path.lower().endswith('.webp'):
+                    mime_type = "image/webp"
+                    image_format = "webp"
                 else:
                     mime_type = "image/jpeg"  # default
+                    image_format = "jpeg"
                 
-                content["image_base64"] = base64_image  # For Titan
+                content["image_base64"] = base64_image  # For Titan and Nova
                 content["image"] = f"data:{mime_type};base64,{base64_image}"  # For Cohere
+                content["image_format"] = image_format  # For Nova
             else:
                 content["image_base64"] = processing_input.data.get("image_base64", "")
                 content["image"] = processing_input.data.get("image", "")
+                content["image_format"] = "jpeg"  # default when format unknown
                 
         elif processing_input.content_type == "multimodal":
             # Handle multimodal input (text + image)
@@ -136,6 +145,15 @@ class UnifiedProcessor:
             
         elif processing_input.content_type in ["video", "audio"]:
             content["file_path"] = processing_input.data.get("file_path", "")
+            
+            # For sync models (Nova), also read and encode as base64
+            file_path = content["file_path"]
+            if file_path:
+                content["media_base64"] = self._read_image_as_base64(file_path)  # works for any binary
+                
+                # Determine format from extension
+                ext = file_path.lower().rsplit('.', 1)[-1] if '.' in file_path else ''
+                content["media_format"] = ext if ext else "mp4"  # default
             
         return content
     

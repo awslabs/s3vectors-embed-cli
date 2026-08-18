@@ -76,7 +76,7 @@ def _display_results_table(results: Dict[str, Any], console: Console):
 @click.command()
 @click.option('--vector-bucket-name', required=True, help='S3 bucket name for vector storage')
 @click.option('--index-name', required=True, help='Vector index name')
-@click.option('--model-id', required=True, help='Bedrock embedding model ID (e.g., amazon.titan-embed-text-v2:0, amazon.titan-embed-image-v1, cohere.embed-english-v3, twelvelabs.marengo-embed-2-7-v1:0)')
+@click.option('--model-id', required=True, help='Bedrock embedding model ID (e.g., amazon.titan-embed-text-v2:0, amazon.titan-embed-image-v1, cohere.embed-english-v3, amazon.nova-2-multimodal-embeddings-v1:0, twelvelabs.marengo-embed-2-7-v1:0)')
 @click.option('--query-input', help='[DEPRECATED] Query text or file path - use specific input types instead')
 @click.option('--text-value', help='Direct text query string')
 @click.option('--text', help='Text file path (local file or S3 URI)')
@@ -115,6 +115,7 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
     • amazon.titan-embed-image-v1 (text and image queries, 1024/384/256 dimensions)
     • cohere.embed-english-v3 (text queries, 1024 dimensions)
     • cohere.embed-multilingual-v3 (text queries, 1024 dimensions)
+    • amazon.nova-2-multimodal-embeddings-v1:0 (text, image, video, audio queries, 3072/1024/384/256 dimensions)
     • twelvelabs.marengo-embed-2-7-v1:0 (text, video, audio queries, 1024 dimensions, async processing)
     
     \b

@@ -201,6 +201,69 @@ class SupportedModel(Enum):
         response_embedding_path="embeddings[0]"
     ))
     
+    # Amazon Nova Models
+    NOVA_MULTIMODAL_EMBED_V1 = ("amazon.nova-2-multimodal-embeddings-v1:0", ModelCapabilities(
+        is_async=False,
+        supported_modalities=["text", "image", "video", "audio"],
+        description="Amazon Nova Multimodal Embeddings v1",
+        supports_multimodal_input=False,  # Nova takes one modality per request
+        max_local_file_size=18 * 1024 * 1024,  # ~18MB raw (25MB after base64 inflation)
+        payload_schema={
+            "text": {
+                "taskType": "SINGLE_EMBEDDING",
+                "singleEmbeddingParams": {
+                    "embeddingPurpose": "GENERIC_INDEX",
+                    "embeddingDimension": "{index.dimensions}",
+                    "text": {
+                        "truncationMode": "END",
+                        "value": "{content.text}"
+                    }
+                }
+            },
+            "image": {
+                "taskType": "SINGLE_EMBEDDING",
+                "singleEmbeddingParams": {
+                    "embeddingPurpose": "GENERIC_INDEX",
+                    "embeddingDimension": "{index.dimensions}",
+                    "image": {
+                        "format": "{content.image_format}",
+                        "source": {
+                            "bytes": "{content.image_base64}"
+                        }
+                    }
+                }
+            },
+            "video": {
+                "taskType": "SINGLE_EMBEDDING",
+                "singleEmbeddingParams": {
+                    "embeddingPurpose": "GENERIC_INDEX",
+                    "embeddingDimension": "{index.dimensions}",
+                    "video": {
+                        "format": "{content.media_format}",
+                        "source": {
+                            "bytes": "{content.media_base64}"
+                        },
+                        "embeddingMode": "AUDIO_VIDEO_COMBINED"
+                    }
+                }
+            },
+            "audio": {
+                "taskType": "SINGLE_EMBEDDING",
+                "singleEmbeddingParams": {
+                    "embeddingPurpose": "GENERIC_INDEX",
+                    "embeddingDimension": "{index.dimensions}",
+                    "audio": {
+                        "format": "{content.media_format}",
+                        "source": {
+                            "bytes": "{content.media_base64}"
+                        }
+                    }
+                }
+            }
+        },
+        response_embedding_path="embeddings[0].embedding"
+    ))
+    
     # TwelveLabs Models
     TWELVELABS_MARENGO_V2_7 = ("twelvelabs.marengo-embed-2-7-v1:0", ModelCapabilities(
         is_async=True,
@@ -293,12 +356,72 @@ class SupportedModel(Enum):
         # Apply schema to get system payload
         system_payload = self._apply_schema(schema, context)
         
+        # Remap flat user params for models with nested payload structures (e.g., Nova)
+        user_params = self._remap_user_params(system_payload, user_params, content_type)
+        
         # Deep merge user parameters into system payload
         return self._deep_merge(system_payload, user_params)
     
     def extract_embedding(self, response: dict) -> list:
         """Extract embedding from model response using schema."""
         return self._extract_by_path(response, self.capabilities.response_embedding_path)
+    
+    def _remap_user_params(self, system_payload: dict, user_params: dict, content_type: str) -> dict:
+        """Remap flat user params into nested structure for models like Nova.
+        
+        Nova accepts user params like {"embeddingPurpose": "TEXT_RETRIEVAL", "truncationMode": "NONE"}
+        but the payload structure nests them inside singleEmbeddingParams. This method detects
+        Nova-style payloads and nests user params appropriately.
+        """
+        if not user_params:
+            return user_params
+        
+        # Only remap for Nova-style payloads (has singleEmbeddingParams)
+        if "singleEmbeddingParams" not in system_payload:
+            return user_params
+        
+        # Nova embedding params that belong inside singleEmbeddingParams
+        nova_embedding_params = {"embeddingPurpose", "embeddingDimension"}
+        # Nova text params that belong inside singleEmbeddingParams.text
+        nova_text_params = {"truncationMode"}
+        # Nova image params that belong inside singleEmbeddingParams.image
+        nova_image_params = {"detailLevel"}
+        # Nova video params that belong inside singleEmbeddingParams.video
+        nova_video_params = {"embeddingMode"}
+        
+        remapped = {}
+        embedding_overrides = {}
+        text_overrides = {}
+        image_overrides = {}
+        video_overrides = {}
+        
+        for key, value in user_params.items():
+            if key in nova_embedding_params:
+                embedding_overrides[key] = value
+            elif key in nova_text_params and content_type == "text":
+                text_overrides[key] = value
+            elif key in nova_image_params and content_type == "image":
+                image_overrides[key] = value
+            elif key in nova_video_params and content_type == "video":
+                video_overrides[key] = value
+            else:
+                # Unknown param — pass through at top level
+                remapped[key] = value
+        
+        # Build nested structure for remapped params
+        if embedding_overrides or text_overrides or image_overrides or video_overrides:
+            nested = {}
+            nested.update(embedding_overrides)
+            if text_overrides:
+                nested["text"] = text_overrides
+            if image_overrides:
+                nested["image"] = image_overrides
+            if video_overrides:
+                nested["video"] = video_overrides
+            remapped["singleEmbeddingParams"] = nested
+        
+        return remapped
+    
     
     def _apply_schema(self, schema: Any, context: dict) -> Any:
         """Recursively apply context to schema template."""
@@ -364,7 +487,14 @@ class SupportedModel(Enum):
             raise ValueError(f"Failed to extract embedding from response using path '{path}': {e}. Response keys: {list(obj.keys()) if isinstance(obj, dict) else type(obj)}")
     
     def _extract_single_path(self, obj: dict, path: str) -> Any:
-        """Extract value from response using a single path."""
+        """Extract value from response using a single path.
+        
+        Supports:
+        - Simple key: "embedding"
+        - Array access: "embeddings[0]"
+        - Dot-notation: "embeddings[0].embedding"
+        - Dynamic object: "embeddingsByType.*"
+        """
         if path.endswith(".*"):
             # Handle dynamic object access like "embeddingsByType.*"
             key = path[:-2]  # Remove ".*"
@@ -374,6 +504,18 @@ class SupportedModel(Enum):
                 return values[0] if values else []
             else:
                 raise KeyError(f"Key '{key}' not found or not a dictionary")
+        elif "." in path:
+            # Handle dot-notation paths (e.g., "embeddings[0].embedding")
+            parts = path.split(".", 1)
+            first_part = parts[0]
+            remaining = parts[1]
+            # Resolve first part
+            intermediate = self._extract_single_path(obj, first_part)
+            # Resolve remaining path on the intermediate result
+            if isinstance(intermediate, dict):
+                return self._extract_single_path(intermediate, remaining)
+            else:
+                raise KeyError(f"Cannot navigate path '{remaining}' on non-dict: {type(intermediate)}")
         elif "[" in path:
             # Handle array access like "embeddings[0]"
             key, index_part = path.split("[", 1)
