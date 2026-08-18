@@ -229,21 +229,15 @@ class StreamingBatchOrchestrator:
                       vector_bucket_name: str, index_name: str, 
                       metadata: Dict[str, Any], batch_context: Dict[str, Any]) -> Tuple[int, int, List[str], List[str]]:
         """Process a chunk of files using UnifiedProcessor."""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        model = batch_context['model']
         
-        processed_count = 0
-        failed_count = 0
-        processed_keys = []
-        errors = []
-        
-        # For video/audio, process sequentially due to async nature
-        # For text/image, use parallel processing
-        if content_type in ["video", "audio"]:
-            return self._process_chunk_async(chunk_files, content_type, vector_bucket_name, 
-                                           index_name, metadata, batch_context)
-        else:
+        # Route based on model capabilities, not content type
+        if model.capabilities.supports_sync:
             return self._process_chunk_sync(chunk_files, content_type, vector_bucket_name,
                                           index_name, metadata, batch_context)
+        else:
+            return self._process_chunk_async(chunk_files, content_type, vector_bucket_name, 
+                                           index_name, metadata, batch_context)
     
     def _process_chunk_sync(self, chunk_files: List[str], content_type: str,
                            vector_bucket_name: str, index_name: str, 

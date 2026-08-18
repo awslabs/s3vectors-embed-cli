@@ -117,7 +117,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
             raise click.ClickException(str(e))
     
     # Check async model requirements
-    if model.is_async() and not async_output_s3_uri:
+    if not model.capabilities.supports_sync and not async_output_s3_uri:
         raise click.ClickException(
             f"Async models like {model.model_id} require --async-output-s3-uri parameter."
         )
@@ -162,7 +162,8 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
             progress.add_task("Processing input...", total=None)
             result = processor.process(
                 model, processing_input, user_bedrock_params, 
-                async_output_s3_uri, src_bucket_owner, vector_bucket_name, index_name, index_dimensions
+                async_output_s3_uri, src_bucket_owner, vector_bucket_name, index_name, index_dimensions,
+                operation="put"
             )
             
             # Store vectors with batch_size handling

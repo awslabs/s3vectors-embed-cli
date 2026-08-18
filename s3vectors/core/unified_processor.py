@@ -5,8 +5,7 @@ import base64
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
-from s3vectors.utils.models import get_model_info, SupportedModel, ProcessingInput, generate_vector_key
-from s3vectors.utils.multimodal_helpers import create_multimodal_metadata
+from s3vectors.utils.models import SupportedModel, ProcessingInput, generate_vector_key
 
 
 @dataclass
@@ -30,7 +29,8 @@ class UnifiedProcessor:
                 user_bedrock_params: Dict[str, Any] = None,
                 async_output_s3_uri: str = None, src_bucket_owner: str = None,
                 vector_bucket_name: str = None, index_name: str = None,
-                precomputed_dimensions: int = None) -> ProcessingResult:
+                precomputed_dimensions: int = None,
+                operation: str = "put") -> ProcessingResult:
         """Unified processing method for all input types and models."""
         
         # Step 1: Get index dimensions if available
@@ -43,26 +43,40 @@ class UnifiedProcessor:
         # Step 2: Build content for schema application
         content = self._prepare_content(processing_input, index_dimensions)
         
-        # Step 3: Build payload using schema-based system (includes validation and merge)
+        # Step 3: Determine sync/async routing based on model capabilities
         user_bedrock_params = user_bedrock_params or {}
         
+        use_async = model.capabilities.supports_async and bool(async_output_s3_uri)
+        use_sync = model.capabilities.supports_sync and not use_async
+        
+        if not use_async and not use_sync:
+            raise ValueError(f"Model {model.model_id} requires --async-output-s3-uri for processing")
+        
         # Build final payload with user parameters
-        if model.is_async():
+        if use_async:
             async_config = {
                 "output_s3_uri": async_output_s3_uri,
                 "src_bucket_owner": src_bucket_owner
             }
-            final_payload = model.build_payload(processing_input.content_type, content, user_bedrock_params, async_config)
+            
+            # If model requires S3 source for async and we have local/inline text,
+            # upload it to the async output location so the API can reference it.
+            if (model.capabilities.async_requires_s3_source and 
+                processing_input.content_type == "text" and
+                not content.get("file_path", "").startswith("s3://")):
+                content = self._upload_text_for_async(content, async_output_s3_uri, src_bucket_owner)
+            
+            final_payload = model.build_payload(processing_input.content_type, content, user_bedrock_params, async_config, operation=operation)
         else:
-            final_payload = model.build_payload(processing_input.content_type, content, user_bedrock_params)
+            final_payload = model.build_payload(processing_input.content_type, content, user_bedrock_params, operation=operation)
         
         # Step 4: Get embeddings
-        if model.is_async():
+        if use_async:
             raw_results, job_id = self.bedrock_service.embed_async_with_payload(
-                model.model_id, final_payload, async_output_s3_uri
+                model, final_payload, async_output_s3_uri
             )
         else:
-            raw_results = self._embed_sync(model.model_id, final_payload, user_bedrock_params)
+            raw_results = self._embed_sync(model, final_payload)
             job_id = None
         
         # Step 6: Process results into vectors (unified)
@@ -79,8 +93,12 @@ class UnifiedProcessor:
         
         if processing_input.content_type == "text":
             if "file_path" in processing_input.data and "text" not in processing_input.data:
-                # Read file content for sync models
-                file_content = self._read_file_content(processing_input.data["file_path"])
+                file_path = processing_input.data["file_path"]
+                # Preserve file_path so async (segmented) schemas can build a
+                # source object (S3 location or bytes) instead of an inline value.
+                content["file_path"] = file_path
+                # Read file content for sync models (inline value) and metadata
+                file_content = self._read_file_content(file_path)
                 content["text"] = file_content
                 # Update processing_input.data so metadata logic can access the text content
                 processing_input.data["text"] = file_content
@@ -139,6 +157,34 @@ class UnifiedProcessor:
             
         return content
     
+    def _upload_text_for_async(self, content: Dict[str, Any], async_output_s3_uri: str, src_bucket_owner: str = None) -> Dict[str, Any]:
+        """Upload local/inline text to S3 for models that require S3 source in async mode.
+        
+        Returns a modified content dict with file_path pointing to the uploaded S3 location.
+        """
+        import uuid as _uuid
+        text_content = content.get("text", "")
+        if not text_content:
+            return content
+        
+        # Upload to a temp location under the async output URI
+        base_uri = async_output_s3_uri.rstrip("/")
+        upload_key = f"{base_uri}/input/{_uuid.uuid4().hex}.txt"
+        
+        # Parse S3 URI
+        path = upload_key.replace("s3://", "")
+        parts = path.split("/", 1)
+        bucket = parts[0]
+        key = parts[1] if len(parts) > 1 else ""
+        
+        s3_client = self.session.client('s3')
+        s3_client.put_object(Bucket=bucket, Key=key, Body=text_content.encode('utf-8'))
+        
+        # Update content to reference the S3 location instead of inline/local
+        updated_content = content.copy()
+        updated_content["file_path"] = upload_key
+        return updated_content
+
     def _read_file_content(self, file_path: str) -> str:
         """Read text file content from local or S3."""
         if file_path.startswith('s3://'):
@@ -196,21 +242,38 @@ class UnifiedProcessor:
                 return None  # Skip optional parameters
         return current
     
-    def _embed_sync(self, model_id: str, embedding_input: Dict[str, Any], 
-                   user_bedrock_params: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Handle sync embedding using model's schema."""
-        from s3vectors.utils.models import get_model_info
+    def _get_nested_value(self, obj: dict, dotted_path: str):
+        """Extract a value from a nested dict using dot notation.
         
-        # Get model object for schema-based embedding extraction
-        model = get_model_info(model_id)
-        if not model:
-            raise ValueError(f"Unsupported model: {model_id}")
+        For example, 'segmentMetadata.segmentIndex' will traverse
+        obj['segmentMetadata']['segmentIndex'].
+        Returns None if any key in the path is missing.
+        """
+        parts = dotted_path.split(".")
+        current = obj
+        for part in parts:
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                return None
+        return current
+
+    def _embed_sync(self, model: 'SupportedModel', embedding_input: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Handle sync embedding using model's schema.
         
-        # The embedding_input is already the correct payload from _prepare_embedding_input
-        # BedrockService.embed_with_payload now uses schema-based embedding extraction
-        embedding = self.bedrock_service.embed_with_payload(model, embedding_input)
+        Returns a list of result dicts, each with an 'embedding' key.
+        For multi-embedding responses (e.g., Nova AUDIO_VIDEO_SEPARATE),
+        returns one dict per embedding with additional metadata fields.
+        """
+        response_body = self.bedrock_service.embed_with_payload_raw(model, embedding_input)
+        extracted = model.extract_embedding(response_body)
         
-        return [{"embedding": embedding}]
+        if isinstance(extracted, list) and extracted and isinstance(extracted[0], dict):
+            # Multi-embedding response (e.g., Nova AUDIO_VIDEO_SEPARATE)
+            return [{"embedding": item.get("embedding", []), **item} for item in extracted]
+        else:
+            # Single embedding
+            return [{"embedding": extracted}]
     
     def _prepare_vectors(self, raw_results: List[Dict[str, Any]], 
                         processing_input: ProcessingInput, model: SupportedModel) -> List[Dict[str, Any]]:
@@ -255,11 +318,12 @@ class UnifiedProcessor:
                 if processing_input.content_type == "text" and "text" in processing_input.data:
                     vector_metadata["S3VECTORS-EMBED-SRC-CONTENT"] = processing_input.data["text"]
             
-            # Add model-specific metadata for async models
-            if model.is_async():
-                vector_metadata.update(create_multimodal_metadata(
-                    processing_input.content_type, processing_input.source_location, result, i
-                ))
+            # Add model-specific metadata via config-driven enrichment
+            if model.capabilities.metadata_mapping:
+                for response_key, metadata_key in model.capabilities.metadata_mapping.items():
+                    value = self._get_nested_value(result, response_key)
+                    if value is not None:
+                        vector_metadata[metadata_key] = value
             
             # Create vector in S3 Vectors API format
             vector = {

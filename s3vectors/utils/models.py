@@ -1,12 +1,13 @@
 """Model definitions and capabilities for S3 Vectors CLI."""
 
 import uuid
+import base64
 from pathlib import Path
 from enum import Enum
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Any
 import click
-from s3vectors.utils.multimodal_helpers import build_media_source
+from s3vectors.utils.multimodal_helpers import build_media_source, is_local_path, encode_file_to_base64
 
 
 @dataclass
@@ -117,6 +118,20 @@ class ModelCapabilities:
     payload_schema: Dict[str, Any] = None
     response_embedding_path: str = None  # Path to extract embedding from response
 
+    # --- New declarative fields for data-driven model behavior ---
+    supports_sync: bool = True  # Whether the model can use invoke_model (sync)
+    supports_async: bool = False  # Whether the model can use start_async_invoke
+    content_source_format: str = None  # Controls how file content is placed in the payload (None, "media_source", "nova_source")
+    content_source_requires_format: bool = False  # When True, content source builder adds a "format" field from file extension
+    async_result_config: Dict[str, Any] = None  # Configuration dict for parsing async results from S3
+    query_defaults: Dict[str, Dict[str, Any]] = None  # Default params applied during query operations, keyed by content_type
+    put_defaults: Dict[str, Dict[str, Any]] = None  # Default params applied during put operations, keyed by content_type
+    metadata_mapping: Dict[str, str] = None  # Maps response field names (dot notation) to vector metadata key names
+    supported_dimensions: List[int] = None  # Valid dimension values for validation
+    default_dimensions: int = None  # Default dimension if not specified by the index
+    content_source_params: List[str] = None  # Resolved param keys to include in content source object (e.g., ["embeddingMode", "detailLevel", "segmentationConfig"])
+    async_requires_s3_source: bool = False  # When True, async mode requires S3 source (local text uploaded to S3 before submission)
+
 
 class SupportedModel(Enum):
     """Enumeration of supported embedding models with their capabilities."""
@@ -201,6 +216,138 @@ class SupportedModel(Enum):
         response_embedding_path="embeddings[0]"
     ))
     
+    # Amazon Nova Models
+    NOVA_MME_V1 = ("amazon.nova-2-multimodal-embeddings-v1:0", ModelCapabilities(
+        is_async=False,  # Legacy field; not used for routing
+        supports_sync=True,
+        supports_async=True,
+        supported_modalities=["text", "image", "video", "audio"],
+        description="Amazon Nova Multimodal Embeddings v1",
+        supports_multimodal_input=False,  # One modality per request
+        supported_dimensions=[256, 384, 1024, 3072],
+        default_dimensions=3072,
+        content_source_format="nova_source",
+        content_source_requires_format=True,
+        async_requires_s3_source=True,
+        content_source_params=["embeddingMode", "detailLevel", "segmentationConfig"],
+        payload_schema={
+            "sync": {
+                "text": {
+                    "schemaVersion": "nova-multimodal-embed-v1",
+                    "taskType": "SINGLE_EMBEDDING",
+                    "singleEmbeddingParams": {
+                        "embeddingPurpose": "{resolved.embeddingPurpose}",
+                        "embeddingDimension": "{index.dimensions}",
+                        "text": {
+                            "truncationMode": "{resolved.truncationMode}",
+                            "value": "{content.text}"
+                        }
+                    }
+                },
+                "image": {
+                    "schemaVersion": "nova-multimodal-embed-v1",
+                    "taskType": "SINGLE_EMBEDDING",
+                    "singleEmbeddingParams": {
+                        "embeddingPurpose": "{resolved.embeddingPurpose}",
+                        "embeddingDimension": "{index.dimensions}",
+                        "image": "{content_source}"
+                    }
+                },
+                "video": {
+                    "schemaVersion": "nova-multimodal-embed-v1",
+                    "taskType": "SINGLE_EMBEDDING",
+                    "singleEmbeddingParams": {
+                        "embeddingPurpose": "{resolved.embeddingPurpose}",
+                        "embeddingDimension": "{index.dimensions}",
+                        "video": "{content_source}"
+                    }
+                },
+                "audio": {
+                    "schemaVersion": "nova-multimodal-embed-v1",
+                    "taskType": "SINGLE_EMBEDDING",
+                    "singleEmbeddingParams": {
+                        "embeddingPurpose": "{resolved.embeddingPurpose}",
+                        "embeddingDimension": "{index.dimensions}",
+                        "audio": "{content_source}"
+                    }
+                }
+            },
+            "async": {
+                "text": {
+                    "schemaVersion": "nova-multimodal-embed-v1",
+                    "taskType": "SEGMENTED_EMBEDDING",
+                    "segmentedEmbeddingParams": {
+                        "embeddingPurpose": "{resolved.embeddingPurpose}",
+                        "embeddingDimension": "{index.dimensions}",
+                        "text": {
+                            "truncationMode": "{resolved.truncationMode}",
+                            "source": "{content_source}",
+                            "segmentationConfig": "{resolved.segmentationConfig}"
+                        }
+                    }
+                },
+                "image": {
+                    "schemaVersion": "nova-multimodal-embed-v1",
+                    "taskType": "SEGMENTED_EMBEDDING",
+                    "segmentedEmbeddingParams": {
+                        "embeddingPurpose": "{resolved.embeddingPurpose}",
+                        "embeddingDimension": "{index.dimensions}",
+                        "image": "{content_source}"
+                    }
+                },
+                "video": {
+                    "schemaVersion": "nova-multimodal-embed-v1",
+                    "taskType": "SEGMENTED_EMBEDDING",
+                    "segmentedEmbeddingParams": {
+                        "embeddingPurpose": "{resolved.embeddingPurpose}",
+                        "embeddingDimension": "{index.dimensions}",
+                        "video": "{content_source}"
+                    }
+                },
+                "audio": {
+                    "schemaVersion": "nova-multimodal-embed-v1",
+                    "taskType": "SEGMENTED_EMBEDDING",
+                    "segmentedEmbeddingParams": {
+                        "embeddingPurpose": "{resolved.embeddingPurpose}",
+                        "embeddingDimension": "{index.dimensions}",
+                        "audio": "{content_source}"
+                    }
+                }
+            }
+        },
+        response_embedding_path="embeddings",  # List of embedding objects
+        async_result_config={
+            "type": "manifest_jsonl",
+            "result_file": "segmented-embedding-result.json",
+            "embedding_key": "embedding",
+            "manifest_results_path": "embeddingResults",
+            "manifest_output_uri_key": "outputFileUri",
+            "manifest_type_key": "embeddingType",
+            "manifest_status_key": "status",
+        },
+        query_defaults={
+            "text": {"embeddingPurpose": "TEXT_RETRIEVAL", "truncationMode": "END", "segmentationConfig": {"maxLengthChars": 1024}},
+            "image": {"embeddingPurpose": "IMAGE_RETRIEVAL"},
+            "video": {"embeddingPurpose": "VIDEO_RETRIEVAL", "embeddingMode": "AUDIO_VIDEO_COMBINED"},
+            "audio": {"embeddingPurpose": "AUDIO_RETRIEVAL"},
+        },
+        put_defaults={
+            "text": {"embeddingPurpose": "GENERIC_INDEX", "truncationMode": "END", "segmentationConfig": {"maxLengthChars": 1024}},
+            "image": {"embeddingPurpose": "GENERIC_INDEX"},
+            "video": {"embeddingPurpose": "GENERIC_INDEX", "embeddingMode": "AUDIO_VIDEO_COMBINED"},
+            "audio": {"embeddingPurpose": "GENERIC_INDEX"},
+        },
+        metadata_mapping={
+            "embeddingType": "S3VECTORS-EMBED-TYPE",
+            "segmentMetadata.segmentStartSeconds": "S3VECTORS-EMBED-START-SEC",
+            "segmentMetadata.segmentEndSeconds": "S3VECTORS-EMBED-END-SEC",
+            "segmentMetadata.segmentStartCharPosition": "S3VECTORS-EMBED-START-CHAR-POS",
+            "segmentMetadata.segmentEndCharPosition": "S3VECTORS-EMBED-END-CHAR-POS",
+            "segmentMetadata.segmentIndex": "S3VECTORS-EMBED-SEGMENT-IDX",
+            "truncatedCharLength": "S3VECTORS-EMBED-TRUNCATED-CHAR-LEN",
+        },
+    ))
+    
     # TwelveLabs Models
     TWELVELABS_MARENGO_V2_7 = ("twelvelabs.marengo-embed-2-7-v1:0", ModelCapabilities(
         is_async=True,
@@ -226,7 +373,21 @@ class SupportedModel(Enum):
             }
             # All TwelveLabs user parameters (startSec, lengthSec, etc.) now allowed via merge
         },
-        response_embedding_path="embedding"
+        response_embedding_path="embedding",
+        supports_sync=False,
+        supports_async=True,
+        content_source_format="media_source",
+        async_result_config={
+            "type": "single_file",
+            "result_file": "output.json",
+            "data_path": "data",
+            "embedding_key": "embedding",
+        },
+        metadata_mapping={
+            "startSec": "S3VECTORS-EMBED-START-SEC",
+            "endSec": "S3VECTORS-EMBED-END-SEC",
+            "embeddingOption": "S3VECTORS-EMBED-TYPE",
+        },
     ))
     
     def __init__(self, model_id: str, capabilities: ModelCapabilities):
@@ -246,11 +407,61 @@ class SupportedModel(Enum):
         return self.capabilities.is_async
     
     def get_system_keys(self, content_type: str) -> List[str]:
-        """Extract top-level keys from payload schema without building payload."""
+        """Return system-controlled parameter keys for a content type.
+
+        These are keys the CLI populates itself (schema literals like
+        schemaVersion/taskType, index-derived values like embeddingDimension,
+        and content/source fields) which a user must NOT override via
+        --bedrock-inference-params. User-overridable keys are excluded: operation
+        defaults referenced via {resolved.X} (e.g. truncationMode,
+        embeddingPurpose) and content_source_params (e.g. embeddingMode,
+        detailLevel, segmentationConfig).
+
+        The schema is walked recursively and across any sync/async layer so
+        nested system keys (e.g. embeddingDimension) are detected for models like
+        Nova whose schema is nested. Flat-schema models are unaffected.
+        """
         schema = self.capabilities.payload_schema
-        if isinstance(schema, dict) and content_type in schema:
-            schema = schema[content_type]
-        return list(schema.keys()) if isinstance(schema, dict) else []
+        if not isinstance(schema, dict):
+            return []
+
+        # Collect the schema branch(es) for this content type, descending through
+        # any sync/async layer.
+        branches = []
+        if "sync" in schema and "async" in schema:
+            for mode in ("sync", "async"):
+                mode_schema = schema.get(mode, {})
+                if isinstance(mode_schema, dict) and content_type in mode_schema:
+                    branches.append(mode_schema[content_type])
+        elif content_type in schema:
+            branches.append(schema[content_type])
+        else:
+            branches.append(schema)
+
+        keys: set = set()
+        overridable: set = set()
+        for branch in branches:
+            self._collect_schema_keys(branch, keys, overridable)
+
+        # content_source_params are user-overridable model parameters.
+        if self.capabilities.content_source_params:
+            overridable.update(self.capabilities.content_source_params)
+
+        return sorted(keys - overridable)
+
+    def _collect_schema_keys(self, schema: Any, keys: set, overridable: set) -> None:
+        """Recursively collect schema keys, marking {resolved.X} keys overridable."""
+        if isinstance(schema, dict):
+            for key, value in schema.items():
+                keys.add(key)
+                if (isinstance(value, str) and value.startswith("{resolved.")
+                        and value.endswith("}")):
+                    overridable.add(key)
+                else:
+                    self._collect_schema_keys(value, keys, overridable)
+        elif isinstance(schema, list):
+            for item in schema:
+                self._collect_schema_keys(item, keys, overridable)
     
     def supports_modality(self, modality: str) -> bool:
         """Check if model supports a specific modality."""
@@ -261,44 +472,202 @@ class SupportedModel(Enum):
         return self.capabilities.supports_multimodal_input
     
     def build_payload(self, content_type: str, content: dict, user_params: dict = None, 
-                     async_config: dict = None) -> dict:
+                     async_config: dict = None, operation: str = "put") -> dict:
         """Build model-specific payload using schema."""
         user_params = user_params or {}
+        
+        # Determine processing mode
+        is_async_mode = bool(async_config and async_config.get("output_s3_uri"))
+        
+        # Resolve operation defaults merged with user params
+        resolved_params = self._resolve_operation_params(content_type, user_params, operation)
         
         # Create context for schema substitution
         context = {
             "model_id": self.model_id,
             "content_type": content_type,
             "content": content,
-            "index": content.get("index", {}),  # Flatten index to root level
+            "index": content.get("index", {}),
             "user": user_params,
+            "resolved": resolved_params,
             "async_config": async_config or {}
         }
         
-        # Handle dynamic mediaSource for async multimodal models (video/audio/image)
-        if (self.capabilities.is_async and 
-            content_type in ["video", "audio", "image"] and 
-            content_type in self.capabilities.supported_modalities):
+        # Build content source if needed
+        if self.capabilities.content_source_format:
             file_path = content.get("file_path", "")
             src_bucket_owner = async_config.get("src_bucket_owner") if async_config else None
-            max_file_size = self.capabilities.max_local_file_size
-            context["media_source"] = build_media_source(file_path, src_bucket_owner, max_file_size)
+            if file_path:
+                context["content_source"] = self._build_content_source(
+                    file_path, src_bucket_owner, content, resolved_params, content_type
+                )
+                # For backward compatibility with TwelveLabs schemas that use {media_source}
+                if self.capabilities.content_source_format == "media_source":
+                    context["media_source"] = context["content_source"]
+            elif content_type == "text" and is_async_mode and content.get("text"):
+                # Some models (e.g., Nova segmented) use a source object for
+                # async text instead of an inline value. Only build the
+                # content_source if the schema actually references it — models
+                # that use {content.text} directly (e.g., TwelveLabs) don't need
+                # one and would break if we tried to encode an empty file_path.
+                text_schema = self._select_schema(content_type, is_async_mode)
+                if self._schema_references_template(text_schema, "content_source"):
+                    context["content_source"] = self._build_content_source(
+                        "", src_bucket_owner, content, resolved_params, content_type
+                    )
         
-        # Handle conditional schemas (like Cohere)
-        schema = self.capabilities.payload_schema
-        if isinstance(schema, dict) and content_type in schema:
-            # Use content_type-specific schema
-            schema = schema[content_type]
+        # Select schema (sync/async aware)
+        schema = self._select_schema(content_type, is_async_mode)
         
         # Apply schema to get system payload
         system_payload = self._apply_schema(schema, context)
         
-        # Deep merge user parameters into system payload
-        return self._deep_merge(system_payload, user_params)
+        # Determine which user params were already consumed by the schema so we
+        # don't redundantly re-add them at the payload root. Params consumed via
+        # {resolved.X} templates (e.g. truncationMode, embeddingPurpose) and via
+        # content_source_params (e.g. embeddingMode, detailLevel, segmentationConfig)
+        # are placed into nested locations by the schema; merging them again at the
+        # root produces unknown top-level fields that Bedrock rejects (Nova).
+        consumed_keys = self._collect_resolved_keys(schema)
+        if self.capabilities.content_source_params:
+            consumed_keys.update(self.capabilities.content_source_params)
+        merge_params = {k: v for k, v in user_params.items() if k not in consumed_keys}
+        
+        # Deep merge remaining user parameters into system payload
+        return self._deep_merge(system_payload, merge_params)
     
-    def extract_embedding(self, response: dict) -> list:
-        """Extract embedding from model response using schema."""
-        return self._extract_by_path(response, self.capabilities.response_embedding_path)
+    def _schema_references_template(self, schema: Any, template_name: str) -> bool:
+        """Check if a schema references a given template variable like {content_source}."""
+        if isinstance(schema, dict):
+            return any(self._schema_references_template(v, template_name) for v in schema.values())
+        elif isinstance(schema, list):
+            return any(self._schema_references_template(item, template_name) for item in schema)
+        elif isinstance(schema, str):
+            return schema == f"{{{template_name}}}"
+        return False
+
+    def _collect_resolved_keys(self, schema: Any) -> set:
+        """Collect user-param keys consumed by the schema via {resolved.X} templates.
+        
+        Walks the schema template recursively and returns the set of top-level
+        keys referenced through the 'resolved' context (which is the merge of
+        operation defaults and user params). These keys are already substituted
+        into nested positions and must be excluded from the top-level deep merge.
+        Models with flat schemas (Titan/Cohere/TwelveLabs) use no {resolved.X}
+        templates, so this returns an empty set and their merge is unchanged.
+        """
+        keys = set()
+        if isinstance(schema, dict):
+            for value in schema.values():
+                keys |= self._collect_resolved_keys(value)
+        elif isinstance(schema, list):
+            for item in schema:
+                keys |= self._collect_resolved_keys(item)
+        elif isinstance(schema, str) and schema.startswith("{") and schema.endswith("}"):
+            path = schema[1:-1]
+            if path.startswith("resolved."):
+                keys.add(path.split(".")[1])
+        return keys
+    
+    def _resolve_operation_params(self, content_type: str, user_params: dict,
+                                  operation: str = "put") -> dict:
+        """Merge operation defaults with user params. User params win."""
+        defaults_map = (self.capabilities.query_defaults if operation == "query"
+                        else self.capabilities.put_defaults)
+        if not defaults_map:
+            return user_params.copy()
+        
+        defaults = defaults_map.get(content_type, {})
+        merged = defaults.copy()
+        merged.update(user_params)
+        return merged
+    
+    def _select_schema(self, content_type: str, is_async_mode: bool) -> dict:
+        """Select the correct schema branch for content_type and sync/async mode."""
+        schema = self.capabilities.payload_schema
+        
+        if isinstance(schema, dict):
+            # Check for sync/async top-level keys
+            if "sync" in schema and "async" in schema:
+                mode_key = "async" if is_async_mode else "sync"
+                schema = schema[mode_key]
+            
+            # Check for content_type sub-key
+            if content_type in schema:
+                schema = schema[content_type]
+        
+        return schema
+    
+    def _build_content_source(self, file_path: str, src_bucket_owner: str = None,
+                              content: dict = None,
+                              resolved_params: dict = None,
+                              content_type: str = None) -> Any:
+        """Build content source object based on model's content_source_format."""
+        fmt = self.capabilities.content_source_format
+        
+        if fmt == "media_source":
+            # TwelveLabs style
+            return build_media_source(file_path, src_bucket_owner,
+                                      self.capabilities.max_local_file_size)
+        elif fmt == "nova_source":
+            is_text = (content_type == "text")
+            
+            if is_text:
+                # Text follows the text-input flow: inline and local text are
+                # already read into content["text"], so encode that string as a
+                # bytes SourceObject. Only S3 text is referenced by location (so
+                # large objects aren't pulled into the payload). Text
+                # SourceObjects carry no "format" field.
+                if file_path and not is_local_path(file_path):
+                    s3_loc = {"uri": file_path}
+                    if src_bucket_owner:
+                        s3_loc["bucketOwner"] = src_bucket_owner
+                    return {"s3Location": s3_loc}
+                text_value = (content or {}).get("text", "")
+                return {"bytes": base64.b64encode(text_value.encode("utf-8")).decode("utf-8")}
+            
+            # Media (image/audio/video): build the whole modality object
+            # ({format, source, <media params>}) since the schema maps
+            # {content_source} to it directly.
+            if is_local_path(file_path):
+                base64_data = (content.get("image_base64") if content else None) or encode_file_to_base64(file_path)
+                source_inner = {"bytes": base64_data}
+            else:
+                s3_loc = {"uri": file_path}
+                if src_bucket_owner:
+                    s3_loc["bucketOwner"] = src_bucket_owner
+                source_inner = {"s3Location": s3_loc}
+            
+            source_obj = {}
+            if self.capabilities.content_source_requires_format and file_path:
+                ext = Path(file_path).suffix.lstrip(".").lower()
+                if ext == "jpg":
+                    ext = "jpeg"
+                source_obj["format"] = ext
+            source_obj["source"] = source_inner
+            if resolved_params and self.capabilities.content_source_params:
+                for key in self.capabilities.content_source_params:
+                    if key in resolved_params:
+                        source_obj[key] = resolved_params[key]
+            
+            return source_obj
+        else:
+            return None
+    
+    def extract_embedding(self, response: dict) -> Any:
+        """Extract embedding(s) from model response.
+        
+        Returns either:
+        - List[float]: single embedding vector
+        - List[Dict]: list of embedding result objects (for multi-embedding responses)
+        """
+        result = self._extract_by_path(response, self.capabilities.response_embedding_path)
+        
+        # If result is a list of dicts (multi-embedding), return as-is
+        if isinstance(result, list) and result and isinstance(result[0], dict):
+            return result  # e.g., [{"embedding": [...], "embeddingType": "VIDEO"}, ...]
+        
+        return result  # Single embedding vector
     
     def _apply_schema(self, schema: Any, context: dict) -> Any:
         """Recursively apply context to schema template."""
