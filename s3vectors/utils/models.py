@@ -326,13 +326,13 @@ class SupportedModel(Enum):
             "manifest_status_key": "status",
         },
         query_defaults={
-            "text": {"embeddingPurpose": "TEXT_RETRIEVAL", "truncationMode": "END", "segmentationConfig": {"maxLengthChars": 1024}},
+            "text": {"embeddingPurpose": "TEXT_RETRIEVAL", "truncationMode": "END", "segmentationConfig": {}},
             "image": {"embeddingPurpose": "IMAGE_RETRIEVAL"},
             "video": {"embeddingPurpose": "VIDEO_RETRIEVAL", "embeddingMode": "AUDIO_VIDEO_COMBINED"},
             "audio": {"embeddingPurpose": "AUDIO_RETRIEVAL"},
         },
         put_defaults={
-            "text": {"embeddingPurpose": "GENERIC_INDEX", "truncationMode": "END", "segmentationConfig": {"maxLengthChars": 1024}},
+            "text": {"embeddingPurpose": "GENERIC_INDEX", "truncationMode": "END", "segmentationConfig": {}},
             "image": {"embeddingPurpose": "GENERIC_INDEX"},
             "video": {"embeddingPurpose": "GENERIC_INDEX", "embeddingMode": "AUDIO_VIDEO_COMBINED"},
             "audio": {"embeddingPurpose": "GENERIC_INDEX"},
