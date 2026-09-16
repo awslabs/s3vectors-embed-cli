@@ -8,7 +8,7 @@ from rich.table import Table
 from s3vectors.core.unified_processor import UnifiedProcessor
 from s3vectors.core.services import BedrockService, S3VectorService
 from s3vectors.utils.config import setup_aws_session, get_region, get_current_account_id
-from s3vectors.utils.models import get_model_info, validate_model_modality, prepare_processing_input, determine_content_type
+from s3vectors.utils.models import get_model_info, validate_model_modality, prepare_processing_input, determine_content_type, validate_index_dimensions
 
 
 def _validate_query_inputs(query_input, text_value, text, image, video, audio, model):
@@ -199,6 +199,13 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
                 raise click.ClickException(f"Could not determine dimensions for index {index_name}")
         except Exception as e:
             raise click.ClickException(f"Failed to get index information: {str(e)}")
+        
+        # Fail fast if the index dimension isn't supported by the model,
+        # instead of letting Bedrock reject the request with an opaque error.
+        try:
+            validate_index_dimensions(model, index_dimensions)
+        except ValueError as e:
+            raise click.ClickException(str(e))
         
         # Create ProcessingInput (no metadata, keys, or object naming for queries)
         processing_input = prepare_processing_input(text_value, text, image, video, audio, is_multimodal, None, None, False, None)

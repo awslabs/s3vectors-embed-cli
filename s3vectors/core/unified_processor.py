@@ -213,51 +213,6 @@ class UnifiedProcessor:
         
         return base64.b64encode(image_bytes).decode('utf-8')
     
-    def _apply_schema(self, schema: Any, context: dict) -> Any:
-        """Recursively apply context to schema template."""
-        if isinstance(schema, dict):
-            result = {}
-            for key, value in schema.items():
-                applied_value = self._apply_schema(value, context)
-                if applied_value is not None:  # Skip None values
-                    result[key] = applied_value
-            return result
-        elif isinstance(schema, list):
-            return [self._apply_schema(item, context) for item in schema]
-        elif isinstance(schema, str) and schema.startswith("{") and schema.endswith("}"):
-            # Template substitution
-            path = schema[1:-1]  # Remove { }
-            return self._get_by_path(context, path)
-        else:
-            return schema
-    
-    def _get_by_path(self, obj: dict, path: str) -> Any:
-        """Get value from nested dict by dot notation path."""
-        parts = path.split(".")
-        current = obj
-        for part in parts:
-            if isinstance(current, dict) and part in current:
-                current = current[part]
-            else:
-                return None  # Skip optional parameters
-        return current
-    
-    def _get_nested_value(self, obj: dict, dotted_path: str):
-        """Extract a value from a nested dict using dot notation.
-        
-        For example, 'segmentMetadata.segmentIndex' will traverse
-        obj['segmentMetadata']['segmentIndex'].
-        Returns None if any key in the path is missing.
-        """
-        parts = dotted_path.split(".")
-        current = obj
-        for part in parts:
-            if isinstance(current, dict) and part in current:
-                current = current[part]
-            else:
-                return None
-        return current
-
     def _embed_sync(self, model: 'SupportedModel', embedding_input: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Handle sync embedding using model's schema.
         
@@ -318,12 +273,9 @@ class UnifiedProcessor:
                 if processing_input.content_type == "text" and "text" in processing_input.data:
                     vector_metadata["S3VECTORS-EMBED-SRC-CONTENT"] = processing_input.data["text"]
             
-            # Add model-specific metadata via config-driven enrichment
-            if model.capabilities.metadata_mapping:
-                for response_key, metadata_key in model.capabilities.metadata_mapping.items():
-                    value = self._get_nested_value(result, response_key)
-                    if value is not None:
-                        vector_metadata[metadata_key] = value
+            # Add model-specific metadata via the model's own builder function
+            if model.capabilities.result_metadata_builder:
+                vector_metadata.update(model.capabilities.result_metadata_builder(result))
             
             # Create vector in S3 Vectors API format
             vector = {

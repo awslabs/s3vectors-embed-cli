@@ -6,7 +6,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from s3vectors.core.services import BedrockService, S3VectorService
 from s3vectors.core.unified_processor import UnifiedProcessor
 from s3vectors.utils.config import get_region, get_current_account_id
-from s3vectors.utils.models import get_model_info, validate_user_parameters, prepare_processing_input, determine_content_type
+from s3vectors.utils.models import get_model_info, validate_user_parameters, prepare_processing_input, determine_content_type, validate_index_dimensions
 from s3vectors.core.streaming_batch_orchestrator import StreamingBatchOrchestrator
 
 
@@ -142,6 +142,13 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
         except Exception as e:
             raise click.ClickException(f"Failed to get index information: {str(e)}")
         
+        # Fail fast if the index dimension isn't supported by the model,
+        # instead of letting Bedrock reject the request with an opaque error.
+        try:
+            validate_index_dimensions(model, index_dimensions)
+        except ValueError as e:
+            raise click.ClickException(str(e))
+        
         # Prepare processing input
         processing_input = prepare_processing_input(
             text_value, text, image, video, audio, is_multimodal, metadata_dict, key, filename_as_key, key_prefix
@@ -268,28 +275,6 @@ def _process_streaming_batch(file_path, content_type, vector_bucket_name, index_
     except Exception as e:
         console.print(f"[red]Streaming batch processing failed: {str(e)}[/red]")
         raise click.ClickException(f"Streaming batch processing failed: {str(e)}")
-        
-        # Prepare output in unified format
-        result = {
-            "type": "batch",
-            "bucket": vector_bucket_name,
-            "index": index_name,
-            "model": model.model_id,
-            "contentType": content_type,
-            "totalFiles": batch_result.total_files,
-            "processedFiles": batch_result.processed_count,  # Note: processed_count not processed_files
-            "failedFiles": batch_result.failed_count,
-            "totalVectors": batch_result.processed_count,    # Each file = 1 vector
-            "vectorKeys": batch_result.processed_keys
-        }
-        
-        if output == "table":
-            _display_batch_table(result, console)
-        else:
-            console.print_json(data=result)
-        
-    except Exception as e:
-        raise click.ClickException(f"Failed to process batch {file_path}: {str(e)}")
 
 
 def _display_batch_table(result, console):

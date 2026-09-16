@@ -1,11 +1,12 @@
 """Model definitions and capabilities for S3 Vectors CLI."""
 
+import json
 import uuid
 import base64
 from pathlib import Path
 from enum import Enum
 from dataclasses import dataclass
-from typing import List, Optional, Dict, Any
+from typing import Callable, List, Optional, Dict, Any
 import click
 from s3vectors.utils.multimodal_helpers import build_media_source, is_local_path, encode_file_to_base64
 
@@ -108,7 +109,6 @@ def prepare_processing_input(text_value, text, image, video, audio, is_multimoda
 @dataclass
 class ModelCapabilities:
     """Capabilities and properties of an embedding model."""
-    is_async: bool
     supported_modalities: List[str]  # text, image, video, audio
     description: str
     supports_multimodal_input: bool = False  # Can accept multiple modalities simultaneously
@@ -118,19 +118,172 @@ class ModelCapabilities:
     payload_schema: Dict[str, Any] = None
     response_embedding_path: str = None  # Path to extract embedding from response
 
-    # --- New declarative fields for data-driven model behavior ---
+    # Sync/async support
     supports_sync: bool = True  # Whether the model can use invoke_model (sync)
     supports_async: bool = False  # Whether the model can use start_async_invoke
-    content_source_format: str = None  # Controls how file content is placed in the payload (None, "media_source", "nova_source")
-    content_source_requires_format: bool = False  # When True, content source builder adds a "format" field from file extension
-    async_result_config: Dict[str, Any] = None  # Configuration dict for parsing async results from S3
+    async_requires_s3_source: bool = False  # When True, async mode requires S3 source (local text uploaded to S3 before submission)
+
+    # Per-model behavior functions (defined below, referenced by each model's
+    # entry). Models that need special source/result handling point these at
+    # their own functions rather than encoding behavior in generic config.
+    content_source_builder: Callable = None   # fn(capabilities, file_path, src_bucket_owner, content, resolved_params, content_type) -> source object
+    async_result_parser: Callable = None      # fn(read_json, read_text, parse_s3_uri, bucket, prefix) -> list of raw results
+    result_metadata_builder: Callable = None  # fn(raw_result) -> dict of vector metadata
+
+    # Operation defaults (plain data; merged beneath user --bedrock-inference-params)
     query_defaults: Dict[str, Dict[str, Any]] = None  # Default params applied during query operations, keyed by content_type
     put_defaults: Dict[str, Dict[str, Any]] = None  # Default params applied during put operations, keyed by content_type
-    metadata_mapping: Dict[str, str] = None  # Maps response field names (dot notation) to vector metadata key names
-    supported_dimensions: List[int] = None  # Valid dimension values for validation
-    default_dimensions: int = None  # Default dimension if not specified by the index
-    content_source_params: List[str] = None  # Resolved param keys to include in content source object (e.g., ["embeddingMode", "detailLevel", "segmentationConfig"])
-    async_requires_s3_source: bool = False  # When True, async mode requires S3 source (local text uploaded to S3 before submission)
+
+    # Model constraints
+    supported_dimensions: List[int] = None  # Valid index dimensions; enforced by validate_index_dimensions()
+    content_source_params: List[str] = None  # User-overridable param keys nested into the source object (e.g., ["embeddingMode", "detailLevel", "segmentationConfig"])
+
+
+# ---------------------------------------------------------------------------
+# Per-model behavior functions.
+#
+# Each model that needs custom handling has its own function here, referenced
+# from its ModelCapabilities entry. Adding a new model with different behavior
+# means adding a new function, not extending generic config.
+# ---------------------------------------------------------------------------
+
+
+def build_twelvelabs_content_source(capabilities, file_path, src_bucket_owner=None,
+                                    content=None, resolved_params=None, content_type=None):
+    """TwelveLabs mediaSource: base64String for local files, s3Location for S3."""
+    return build_media_source(file_path, src_bucket_owner, capabilities.max_local_file_size)
+
+
+def build_nova_content_source(capabilities, file_path, src_bucket_owner=None,
+                              content=None, resolved_params=None, content_type=None):
+    """Nova SourceObject builder.
+
+    Text: inline/local text is already read into content["text"], so it is
+    sent as a base64 bytes SourceObject; S3 text is referenced by location so
+    large objects aren't pulled into the payload. Text sources carry no
+    "format" field.
+
+    Media (image/audio/video): builds the whole modality object
+    ({format, source, <media params>}) since the schema maps {content_source}
+    to it directly. Nova requires an explicit format, derived from the file
+    extension.
+    """
+    if content_type == "text":
+        if file_path and not is_local_path(file_path):
+            s3_loc = {"uri": file_path}
+            if src_bucket_owner:
+                s3_loc["bucketOwner"] = src_bucket_owner
+            return {"s3Location": s3_loc}
+        text_value = (content or {}).get("text", "")
+        return {"bytes": base64.b64encode(text_value.encode("utf-8")).decode("utf-8")}
+
+    if is_local_path(file_path):
+        base64_data = (content.get("image_base64") if content else None) or encode_file_to_base64(file_path)
+        source_inner = {"bytes": base64_data}
+    else:
+        s3_loc = {"uri": file_path}
+        if src_bucket_owner:
+            s3_loc["bucketOwner"] = src_bucket_owner
+        source_inner = {"s3Location": s3_loc}
+
+    source_obj = {}
+    if file_path:
+        ext = Path(file_path).suffix.lstrip(".").lower()
+        if ext == "jpg":
+            ext = "jpeg"
+        source_obj["format"] = ext
+    source_obj["source"] = source_inner
+    if resolved_params and capabilities.content_source_params:
+        for key in capabilities.content_source_params:
+            if key in resolved_params:
+                source_obj[key] = resolved_params[key]
+    return source_obj
+
+
+def parse_twelvelabs_async_results(read_json, read_text, parse_s3_uri, bucket, prefix):
+    """TwelveLabs async output: a single output.json with a 'data' array."""
+    result_data = read_json(bucket, f"{prefix}output.json")
+    data = result_data.get("data") if isinstance(result_data, dict) else None
+    if isinstance(data, list):
+        return data
+    return result_data if isinstance(result_data, list) else [result_data]
+
+
+def parse_nova_async_results(read_json, read_text, parse_s3_uri, bucket, prefix):
+    """Nova async output: manifest referencing per-modality JSONL files.
+
+    Raises if any manifest entry did not succeed. Failures carry a
+    failureReason (e.g. RAI_VIOLATION_*, INVALID_CONTENT, RATE_LIMIT_EXCEEDED)
+    and must never be silently dropped.
+    """
+    manifest = read_json(bucket, f"{prefix}segmented-embedding-result.json")
+    entries = manifest.get("embeddingResults", [])
+
+    failures = [e for e in entries if e.get("status") != "SUCCESS"]
+    if failures:
+        details = "; ".join(
+            f"{entry.get('embeddingType', 'UNKNOWN')}: status={entry.get('status', 'UNKNOWN')}"
+            + (f", reason={entry['failureReason']}" if entry.get("failureReason") else "")
+            for entry in failures
+        )
+        raise Exception(
+            f"Async embedding job reported {len(failures)} failed result(s): {details}"
+        )
+
+    results = []
+    for entry in entries:
+        output_uri = entry.get("outputFileUri")
+        if not output_uri:
+            continue
+        jsonl_bucket, jsonl_key = parse_s3_uri(output_uri)
+        jsonl_content = read_text(jsonl_bucket, jsonl_key)
+        embedding_type = entry.get("embeddingType")
+        for line in jsonl_content.strip().split("\n"):
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            result_dict = {"embedding": item.get("embedding", [])}
+            if embedding_type:
+                result_dict["embeddingType"] = embedding_type
+            for key, value in item.items():
+                if key != "embedding":
+                    result_dict[key] = value
+            results.append(result_dict)
+    return results
+
+
+def build_twelvelabs_result_metadata(result):
+    """Map a TwelveLabs raw result to vector metadata fields."""
+    metadata = {}
+    if result.get("startSec") is not None:
+        metadata["S3VECTORS-EMBED-START-SEC"] = result["startSec"]
+    if result.get("endSec") is not None:
+        metadata["S3VECTORS-EMBED-END-SEC"] = result["endSec"]
+    if result.get("embeddingOption") is not None:
+        metadata["S3VECTORS-EMBED-TYPE"] = result["embeddingOption"]
+    return metadata
+
+
+def build_nova_result_metadata(result):
+    """Map a Nova raw result (with nested segmentMetadata) to vector metadata."""
+    metadata = {}
+    if result.get("embeddingType") is not None:
+        metadata["S3VECTORS-EMBED-TYPE"] = result["embeddingType"]
+    if result.get("truncatedCharLength") is not None:
+        metadata["S3VECTORS-EMBED-TRUNCATED-CHAR-LEN"] = result["truncatedCharLength"]
+
+    segment = result.get("segmentMetadata") or {}
+    segment_fields = {
+        "segmentStartSeconds": "S3VECTORS-EMBED-START-SEC",
+        "segmentEndSeconds": "S3VECTORS-EMBED-END-SEC",
+        "segmentStartCharPosition": "S3VECTORS-EMBED-START-CHAR-POS",
+        "segmentEndCharPosition": "S3VECTORS-EMBED-END-CHAR-POS",
+        "segmentIndex": "S3VECTORS-EMBED-SEGMENT-IDX",
+    }
+    for source_key, metadata_key in segment_fields.items():
+        if segment.get(source_key) is not None:
+            metadata[metadata_key] = segment[source_key]
+    return metadata
 
 
 class SupportedModel(Enum):
@@ -138,17 +291,17 @@ class SupportedModel(Enum):
     
     # Amazon Titan Models
     TITAN_TEXT_V1 = ("amazon.titan-embed-text-v1", ModelCapabilities(
-        is_async=False,
         supported_modalities=["text"],
         description="Amazon Titan Text Embeddings v1",
+        supported_dimensions=[1536],
         payload_schema={"inputText": "{content.text}"},
         response_embedding_path="embedding"
     ))
     
     TITAN_TEXT_V2 = ("amazon.titan-embed-text-v2:0", ModelCapabilities(
-        is_async=False,
         supported_modalities=["text"],
         description="Amazon Titan Text Embeddings v2",
+        supported_dimensions=[256, 512, 1024],
         payload_schema={
             "inputText": "{content.text}",
             "dimensions": "{index.dimensions}"
@@ -158,10 +311,10 @@ class SupportedModel(Enum):
     ))
     
     TITAN_IMAGE_V1 = ("amazon.titan-embed-image-v1", ModelCapabilities(
-        is_async=False,
         supported_modalities=["text", "image"],
         description="Amazon Titan Multimodal Embeddings v1",
         supports_multimodal_input=True,
+        supported_dimensions=[256, 384, 1024],
         payload_schema={
             "text": {
                 "inputText": "{content.text}",
@@ -183,9 +336,9 @@ class SupportedModel(Enum):
     
     # Cohere Models
     COHERE_ENGLISH_V3 = ("cohere.embed-english-v3", ModelCapabilities(
-        is_async=False,
         supported_modalities=["text", "image"],
         description="Cohere Embed English v3",
+        supported_dimensions=[1024],
         payload_schema={
             "text": {
                 "texts": ["{content.text}"],
@@ -200,9 +353,9 @@ class SupportedModel(Enum):
     ))
     
     COHERE_MULTILINGUAL_V3 = ("cohere.embed-multilingual-v3", ModelCapabilities(
-        is_async=False,
         supported_modalities=["text", "image"],
         description="Cohere Embed Multilingual v3",
+        supported_dimensions=[1024],
         payload_schema={
             "text": {
                 "texts": ["{content.text}"],
@@ -218,17 +371,16 @@ class SupportedModel(Enum):
     
     # Amazon Nova Models
     NOVA_MME_V1 = ("amazon.nova-2-multimodal-embeddings-v1:0", ModelCapabilities(
-        is_async=False,  # Legacy field; not used for routing
         supports_sync=True,
         supports_async=True,
         supported_modalities=["text", "image", "video", "audio"],
         description="Amazon Nova Multimodal Embeddings v1",
         supports_multimodal_input=False,  # One modality per request
         supported_dimensions=[256, 384, 1024, 3072],
-        default_dimensions=3072,
-        content_source_format="nova_source",
-        content_source_requires_format=True,
         async_requires_s3_source=True,
+        content_source_builder=build_nova_content_source,
+        async_result_parser=parse_nova_async_results,
+        result_metadata_builder=build_nova_result_metadata,
         content_source_params=["embeddingMode", "detailLevel", "segmentationConfig"],
         payload_schema={
             "sync": {
@@ -316,43 +468,30 @@ class SupportedModel(Enum):
             }
         },
         response_embedding_path="embeddings",  # List of embedding objects
-        async_result_config={
-            "type": "manifest_jsonl",
-            "result_file": "segmented-embedding-result.json",
-            "embedding_key": "embedding",
-            "manifest_results_path": "embeddingResults",
-            "manifest_output_uri_key": "outputFileUri",
-            "manifest_type_key": "embeddingType",
-            "manifest_status_key": "status",
-        },
         query_defaults={
+            # segmentationConfig is a required wrapper for async text, but
+            # maxLengthChars is optional — leave it empty so Bedrock applies
+            # its own default (32,000) instead of hardcoding it here.
             "text": {"embeddingPurpose": "TEXT_RETRIEVAL", "truncationMode": "END", "segmentationConfig": {}},
             "image": {"embeddingPurpose": "IMAGE_RETRIEVAL"},
             "video": {"embeddingPurpose": "VIDEO_RETRIEVAL", "embeddingMode": "AUDIO_VIDEO_COMBINED"},
             "audio": {"embeddingPurpose": "AUDIO_RETRIEVAL"},
         },
         put_defaults={
+            # segmentationConfig required wrapper only; empty maxLengthChars
+            # lets Bedrock apply its default (32,000) rather than hardcoding.
             "text": {"embeddingPurpose": "GENERIC_INDEX", "truncationMode": "END", "segmentationConfig": {}},
             "image": {"embeddingPurpose": "GENERIC_INDEX"},
             "video": {"embeddingPurpose": "GENERIC_INDEX", "embeddingMode": "AUDIO_VIDEO_COMBINED"},
             "audio": {"embeddingPurpose": "GENERIC_INDEX"},
         },
-        metadata_mapping={
-            "embeddingType": "S3VECTORS-EMBED-TYPE",
-            "segmentMetadata.segmentStartSeconds": "S3VECTORS-EMBED-START-SEC",
-            "segmentMetadata.segmentEndSeconds": "S3VECTORS-EMBED-END-SEC",
-            "segmentMetadata.segmentStartCharPosition": "S3VECTORS-EMBED-START-CHAR-POS",
-            "segmentMetadata.segmentEndCharPosition": "S3VECTORS-EMBED-END-CHAR-POS",
-            "segmentMetadata.segmentIndex": "S3VECTORS-EMBED-SEGMENT-IDX",
-            "truncatedCharLength": "S3VECTORS-EMBED-TRUNCATED-CHAR-LEN",
-        },
     ))
     
     # TwelveLabs Models
     TWELVELABS_MARENGO_V2_7 = ("twelvelabs.marengo-embed-2-7-v1:0", ModelCapabilities(
-        is_async=True,
         supported_modalities=["text", "image", "video", "audio"],
         description="TwelveLabs Marengo Embed 2.7 v1",
+        supported_dimensions=[1024],
         max_local_file_size=36 * 1024 * 1024,  # 36MB limit for local files
         payload_schema={
             "text": {
@@ -376,18 +515,9 @@ class SupportedModel(Enum):
         response_embedding_path="embedding",
         supports_sync=False,
         supports_async=True,
-        content_source_format="media_source",
-        async_result_config={
-            "type": "single_file",
-            "result_file": "output.json",
-            "data_path": "data",
-            "embedding_key": "embedding",
-        },
-        metadata_mapping={
-            "startSec": "S3VECTORS-EMBED-START-SEC",
-            "endSec": "S3VECTORS-EMBED-END-SEC",
-            "embeddingOption": "S3VECTORS-EMBED-TYPE",
-        },
+        content_source_builder=build_twelvelabs_content_source,
+        async_result_parser=parse_twelvelabs_async_results,
+        result_metadata_builder=build_twelvelabs_result_metadata,
     ))
     
     def __init__(self, model_id: str, capabilities: ModelCapabilities):
@@ -401,10 +531,6 @@ class SupportedModel(Enum):
             if model.model_id == model_id:
                 return model
         return None
-    
-    def is_async(self) -> bool:
-        """Check if model requires async processing."""
-        return self.capabilities.is_async
     
     def get_system_keys(self, content_type: str) -> List[str]:
         """Return system-controlled parameter keys for a content type.
@@ -493,17 +619,18 @@ class SupportedModel(Enum):
             "async_config": async_config or {}
         }
         
-        # Build content source if needed
-        if self.capabilities.content_source_format:
+        # Build content source via the model's own builder function, if any
+        builder = self.capabilities.content_source_builder
+        if builder:
             file_path = content.get("file_path", "")
             src_bucket_owner = async_config.get("src_bucket_owner") if async_config else None
             if file_path:
-                context["content_source"] = self._build_content_source(
-                    file_path, src_bucket_owner, content, resolved_params, content_type
-                )
-                # For backward compatibility with TwelveLabs schemas that use {media_source}
-                if self.capabilities.content_source_format == "media_source":
-                    context["media_source"] = context["content_source"]
+                source = builder(self.capabilities, file_path, src_bucket_owner,
+                                 content, resolved_params, content_type)
+                # Schemas reference either {content_source} (Nova) or
+                # {media_source} (TwelveLabs); both map to the same object.
+                context["content_source"] = source
+                context["media_source"] = source
             elif content_type == "text" and is_async_mode and content.get("text"):
                 # Some models (e.g., Nova segmented) use a source object for
                 # async text instead of an inline value. Only build the
@@ -512,8 +639,9 @@ class SupportedModel(Enum):
                 # one and would break if we tried to encode an empty file_path.
                 text_schema = self._select_schema(content_type, is_async_mode)
                 if self._schema_references_template(text_schema, "content_source"):
-                    context["content_source"] = self._build_content_source(
-                        "", src_bucket_owner, content, resolved_params, content_type
+                    context["content_source"] = builder(
+                        self.capabilities, "", src_bucket_owner,
+                        content, resolved_params, content_type
                     )
         
         # Select schema (sync/async aware)
@@ -597,62 +725,6 @@ class SupportedModel(Enum):
                 schema = schema[content_type]
         
         return schema
-    
-    def _build_content_source(self, file_path: str, src_bucket_owner: str = None,
-                              content: dict = None,
-                              resolved_params: dict = None,
-                              content_type: str = None) -> Any:
-        """Build content source object based on model's content_source_format."""
-        fmt = self.capabilities.content_source_format
-        
-        if fmt == "media_source":
-            # TwelveLabs style
-            return build_media_source(file_path, src_bucket_owner,
-                                      self.capabilities.max_local_file_size)
-        elif fmt == "nova_source":
-            is_text = (content_type == "text")
-            
-            if is_text:
-                # Text follows the text-input flow: inline and local text are
-                # already read into content["text"], so encode that string as a
-                # bytes SourceObject. Only S3 text is referenced by location (so
-                # large objects aren't pulled into the payload). Text
-                # SourceObjects carry no "format" field.
-                if file_path and not is_local_path(file_path):
-                    s3_loc = {"uri": file_path}
-                    if src_bucket_owner:
-                        s3_loc["bucketOwner"] = src_bucket_owner
-                    return {"s3Location": s3_loc}
-                text_value = (content or {}).get("text", "")
-                return {"bytes": base64.b64encode(text_value.encode("utf-8")).decode("utf-8")}
-            
-            # Media (image/audio/video): build the whole modality object
-            # ({format, source, <media params>}) since the schema maps
-            # {content_source} to it directly.
-            if is_local_path(file_path):
-                base64_data = (content.get("image_base64") if content else None) or encode_file_to_base64(file_path)
-                source_inner = {"bytes": base64_data}
-            else:
-                s3_loc = {"uri": file_path}
-                if src_bucket_owner:
-                    s3_loc["bucketOwner"] = src_bucket_owner
-                source_inner = {"s3Location": s3_loc}
-            
-            source_obj = {}
-            if self.capabilities.content_source_requires_format and file_path:
-                ext = Path(file_path).suffix.lstrip(".").lower()
-                if ext == "jpg":
-                    ext = "jpeg"
-                source_obj["format"] = ext
-            source_obj["source"] = source_inner
-            if resolved_params and self.capabilities.content_source_params:
-                for key in self.capabilities.content_source_params:
-                    if key in resolved_params:
-                        source_obj[key] = resolved_params[key]
-            
-            return source_obj
-        else:
-            return None
     
     def extract_embedding(self, response: dict) -> Any:
         """Extract embedding(s) from model response.
@@ -772,6 +844,22 @@ def validate_user_parameters(system_payload: Dict[str, Any], user_params: Dict[s
 def get_model_info(model_id: str) -> Optional[SupportedModel]:
     """Get model information from model ID."""
     return SupportedModel.from_model_id(model_id)
+
+
+def validate_index_dimensions(model: SupportedModel, index_dimensions: int) -> None:
+    """Validate the index dimension against the model's supported dimensions.
+
+    Fails fast with a clear message instead of letting Bedrock reject the
+    request with an opaque "Malformed input request" error.
+    """
+    supported = model.capabilities.supported_dimensions
+    if supported and index_dimensions not in supported:
+        supported_str = ", ".join(str(d) for d in supported)
+        raise ValueError(
+            f"Index dimension {index_dimensions} is not supported by {model.model_id}. "
+            f"Supported dimensions: {supported_str}. "
+            f"Use an index whose dimension matches the model."
+        )
 
 
 def validate_model_modality(model_id: str, modality: str) -> None:

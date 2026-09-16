@@ -10,7 +10,6 @@ import boto3
 from botocore.exceptions import ClientError
 
 from s3vectors.utils.boto_config import get_boto_config, get_user_agent
-from s3vectors.utils.models import get_model_info
 
 
 class BedrockService:
@@ -40,11 +39,6 @@ class BedrockService:
         """Log debug message if debug mode is enabled."""
         if self.debug and self.console:
             self.console.print(f"[dim] {message}[/dim]")
-    
-    def is_async_model(self, model_id: str) -> bool:
-        """Check if model requires async processing."""
-        model = get_model_info(model_id)
-        return model.is_async() if model else False
     
     def embed_with_payload(self, model, payload: Dict[str, Any]) -> List[float]:
         """Embed using direct Bedrock API payload for sync models."""
@@ -180,38 +174,21 @@ class BedrockService:
         if poll_count >= max_polls:
             raise Exception("Async job timed out after 30 minutes")
         
-        # Retrieve results from S3 using model's async_result_config
+        # Retrieve results from S3 using the model's own result parser
         return self._get_async_results_from_s3(output_s3_uri, model)
     
     def _get_async_results_from_s3(self, output_s3_uri: str, model) -> list:
-        """Get async results from S3 using model's async_result_config."""
-        config = model.capabilities.async_result_config
+        """Get async results from S3 using the model's own result parser."""
+        parser = model.capabilities.async_result_parser
+        if not parser:
+            raise ValueError(f"Model {model.model_id} has no async result parser configured")
+        
         bucket, prefix = self._parse_s3_uri(output_s3_uri)
         # Ensure prefix ends with /
         if prefix and not prefix.endswith('/'):
             prefix += '/'
         
-        if config["type"] == "single_file":
-            return self._parse_single_file_results(bucket, prefix, config)
-        elif config["type"] == "manifest_jsonl":
-            return self._parse_manifest_jsonl_results(bucket, prefix, config)
-        else:
-            raise ValueError(f"Unknown async_result_config type: {config['type']}")
-    
-    def _has_embeddings(self, data):
-        """Check if the data contains embeddings."""
-        if isinstance(data, dict):
-            # Check for common embedding keys
-            embedding_keys = ['embedding', 'embeddings', 'vector', 'vectors']
-            if any(key in data for key in embedding_keys):
-                return True
-            # Check for TwelveLabs format with 'data' array
-            if 'data' in data and isinstance(data['data'], list):
-                return any(self._has_embeddings(item) for item in data['data'])
-        elif isinstance(data, list):
-            # Check if any item in the list has embeddings
-            return any(self._has_embeddings(item) for item in data)
-        return False
+        return parser(self._read_s3_json, self._read_s3_text, self._parse_s3_uri, bucket, prefix)
 
     def _parse_s3_uri(self, s3_uri: str):
         """Parse S3 URI into (bucket, key)."""
@@ -230,51 +207,6 @@ class BedrockService:
         """Read a text file from S3."""
         response = self.s3_client.get_object(Bucket=bucket, Key=key)
         return response['Body'].read().decode('utf-8')
-
-    def _parse_manifest_jsonl_results(self, bucket: str, prefix: str, config: dict) -> list:
-        """Parse Nova-style manifest + JSONL async results from S3."""
-        manifest_key = f"{prefix}{config['result_file']}"
-        manifest = self._read_s3_json(bucket, manifest_key)
-
-        results = []
-        results_path = config.get("manifest_results_path", "embeddingResults")
-        output_uri_key = config.get("manifest_output_uri_key", "outputFileUri")
-
-        for modality_result in manifest.get(results_path, []):
-            # Skip failed results
-            status = modality_result.get(config.get("manifest_status_key", "status"), "")
-            if status != "SUCCESS":
-                continue
-
-            output_uri = modality_result.get(output_uri_key)
-            if output_uri:
-                jsonl_bucket, jsonl_key = self._parse_s3_uri(output_uri)
-                jsonl_content = self._read_s3_text(jsonl_bucket, jsonl_key)
-                embedding_type = modality_result.get(config.get("manifest_type_key", "embeddingType"))
-
-                for line in jsonl_content.strip().split("\n"):
-                    if line.strip():
-                        entry = json.loads(line)
-                        embedding = entry.get(config.get("embedding_key", "embedding"), [])
-                        result_dict = {"embedding": embedding}
-                        if embedding_type:
-                            result_dict["embeddingType"] = embedding_type
-                        # Copy all other fields from the JSONL entry
-                        for k, v in entry.items():
-                            if k != config.get("embedding_key", "embedding"):
-                                result_dict[k] = v
-                        results.append(result_dict)
-        return results
-
-    def _parse_single_file_results(self, bucket: str, prefix: str, config: dict) -> list:
-        """Parse single-file async results from S3 (e.g., TwelveLabs output.json)."""
-        result_key = f"{prefix}{config['result_file']}"
-        result_data = self._read_s3_json(bucket, result_key)
-
-        data_path = config.get("data_path")
-        if data_path:
-            return result_data.get(data_path, [])
-        return result_data if isinstance(result_data, list) else [result_data]
 
 
 class S3VectorService:
