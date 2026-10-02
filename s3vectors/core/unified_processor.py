@@ -48,24 +48,30 @@ class UnifiedProcessor:
         
         use_async = model.capabilities.supports_async and bool(async_output_s3_uri)
         use_sync = model.capabilities.supports_sync and not use_async
-        
+
         if not use_async and not use_sync:
             raise ValueError(f"Model {model.model_id} requires --async-output-s3-uri for processing")
-        
+
         # Build final payload with user parameters
         if use_async:
             async_config = {
                 "output_s3_uri": async_output_s3_uri,
                 "src_bucket_owner": src_bucket_owner
             }
-            
-            # If model requires S3 source for async and we have local/inline text,
-            # upload it to the async output location so the API can reference it.
-            if (model.capabilities.async_requires_s3_source and 
-                processing_input.content_type == "text" and
+
+            # Models that require an S3 source for async accept only S3 inputs
+            # in that mode (Nova docs: "Asynchronous operations can only accept
+            # S3 inputs"). This applies to every modality. The CLI never stages
+            # local input into the async output location.
+            if (model.capabilities.async_requires_s3_source and
                 not content.get("file_path", "").startswith("s3://")):
-                content = self._upload_text_for_async(content, async_output_s3_uri, src_bucket_owner)
-            
+                raise ValueError(
+                    f"Model {model.model_id} requires {processing_input.content_type} "
+                    f"input to be an S3 URI (s3://bucket/key) when using "
+                    f"--async-output-s3-uri. Inline values and local files are only "
+                    f"supported in sync mode; upload the file to S3 first."
+                )
+
             final_payload = model.build_payload(processing_input.content_type, content, user_bedrock_params, async_config, operation=operation)
         else:
             final_payload = model.build_payload(processing_input.content_type, content, user_bedrock_params, operation=operation)
@@ -157,34 +163,6 @@ class UnifiedProcessor:
             
         return content
     
-    def _upload_text_for_async(self, content: Dict[str, Any], async_output_s3_uri: str, src_bucket_owner: str = None) -> Dict[str, Any]:
-        """Upload local/inline text to S3 for models that require S3 source in async mode.
-        
-        Returns a modified content dict with file_path pointing to the uploaded S3 location.
-        """
-        import uuid as _uuid
-        text_content = content.get("text", "")
-        if not text_content:
-            return content
-        
-        # Upload to a temp location under the async output URI
-        base_uri = async_output_s3_uri.rstrip("/")
-        upload_key = f"{base_uri}/input/{_uuid.uuid4().hex}.txt"
-        
-        # Parse S3 URI
-        path = upload_key.replace("s3://", "")
-        parts = path.split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        
-        s3_client = self.session.client('s3')
-        s3_client.put_object(Bucket=bucket, Key=key, Body=text_content.encode('utf-8'))
-        
-        # Update content to reference the S3 location instead of inline/local
-        updated_content = content.copy()
-        updated_content["file_path"] = upload_key
-        return updated_content
-
     def _read_file_content(self, file_path: str) -> str:
         """Read text file content from local or S3."""
         if file_path.startswith('s3://'):

@@ -2,7 +2,6 @@
 
 import json
 import uuid
-import base64
 from pathlib import Path
 from enum import Enum
 from dataclasses import dataclass
@@ -121,7 +120,7 @@ class ModelCapabilities:
     # Sync/async support
     supports_sync: bool = True  # Whether the model can use invoke_model (sync)
     supports_async: bool = False  # Whether the model can use start_async_invoke
-    async_requires_s3_source: bool = False  # When True, async mode requires S3 source (local text uploaded to S3 before submission)
+    async_requires_s3_source: bool = False  # When True, async input of any modality must already be an S3 URI (inline/local input is rejected, never staged to S3)
 
     # Per-model behavior functions (defined below, referenced by each model's
     # entry). Models that need special source/result handling point these at
@@ -136,7 +135,7 @@ class ModelCapabilities:
 
     # Model constraints
     supported_dimensions: List[int] = None  # Valid index dimensions; enforced by validate_index_dimensions()
-    content_source_params: List[str] = None  # User-overridable param keys nested into the source object (e.g., ["embeddingMode", "detailLevel", "segmentationConfig"])
+    content_source_params: List[str] = None  # User-overridable param keys that belong inside the modality object (e.g., ["embeddingMode", "detailLevel", "segmentationConfig"]); placed there by the schema via {resolved.X} and excluded from the root-level merge
 
 
 # ---------------------------------------------------------------------------
@@ -158,24 +157,31 @@ def build_nova_content_source(capabilities, file_path, src_bucket_owner=None,
                               content=None, resolved_params=None, content_type=None):
     """Nova SourceObject builder.
 
-    Text: inline/local text is already read into content["text"], so it is
-    sent as a base64 bytes SourceObject; S3 text is referenced by location so
-    large objects aren't pulled into the payload. Text sources carry no
-    "format" field.
+    Text: only referenced by S3 location. Per the Nova schema the "bytes"
+    SourceObject is not applicable to text (inline text uses the sync
+    "value" field instead), so a non-S3 text source is an error here. Text
+    sources carry no "format" field.
 
-    Media (image/audio/video): builds the whole modality object
-    ({format, source, <media params>}) since the schema maps {content_source}
-    to it directly. Nova requires an explicit format, derived from the file
-    extension.
+    Media (image/audio/video): returns {format, source}. The payload schema
+    references these as {content_source.format} / {content_source.source} and
+    declares the remaining documented fields (detailLevel, embeddingMode,
+    segmentationConfig) itself via {resolved.X}, so which fields appear in
+    sync vs async is decided by the schema, not here. Nova requires an
+    explicit format, derived from the file extension. Local files become a
+    "bytes" source, which Nova accepts only in sync mode; UnifiedProcessor
+    rejects local/inline input before this builder runs when the request is
+    async (async_requires_s3_source).
     """
     if content_type == "text":
-        if file_path and not is_local_path(file_path):
-            s3_loc = {"uri": file_path}
-            if src_bucket_owner:
-                s3_loc["bucketOwner"] = src_bucket_owner
-            return {"s3Location": s3_loc}
-        text_value = (content or {}).get("text", "")
-        return {"bytes": base64.b64encode(text_value.encode("utf-8")).decode("utf-8")}
+        if not file_path or is_local_path(file_path):
+            raise ValueError(
+                "Nova text source must be an S3 URI (s3://bucket/key); inline and "
+                "local text are only supported as an inline value in sync mode."
+            )
+        s3_loc = {"uri": file_path}
+        if src_bucket_owner:
+            s3_loc["bucketOwner"] = src_bucket_owner
+        return {"s3Location": s3_loc}
 
     if is_local_path(file_path):
         base64_data = (content.get("image_base64") if content else None) or encode_file_to_base64(file_path)
@@ -193,10 +199,6 @@ def build_nova_content_source(capabilities, file_path, src_bucket_owner=None,
             ext = "jpeg"
         source_obj["format"] = ext
     source_obj["source"] = source_inner
-    if resolved_params and capabilities.content_source_params:
-        for key in capabilities.content_source_params:
-            if key in resolved_params:
-                source_obj[key] = resolved_params[key]
     return source_obj
 
 
@@ -214,42 +216,87 @@ def parse_nova_async_results(read_json, read_text, parse_s3_uri, bucket, prefix)
 
     Raises if any manifest entry did not succeed. Failures carry a
     failureReason (e.g. RAI_VIOLATION_*, INVALID_CONTENT, RATE_LIMIT_EXCEEDED)
-    and must never be silently dropped.
+    and a human-readable message, and must never be silently dropped. A
+    manifest with no entries, or a SUCCESS entry with no outputFileUri, is
+    malformed and also raises so a partial embedding set is never stored as
+    if the job were complete.
+
+    Each JSONL line also carries its own status/failureReason/message. A
+    manifest entry can report SUCCESS while individual segments failed, so
+    segment-level failures are collected and raised with the same detail
+    rather than surfacing later as an opaque "missing embedding".
     """
     manifest = read_json(bucket, f"{prefix}segmented-embedding-result.json")
     entries = manifest.get("embeddingResults", [])
+    if not entries:
+        raise Exception(
+            "Async embedding job manifest contains no embeddingResults entries"
+        )
 
     failures = [e for e in entries if e.get("status") != "SUCCESS"]
     if failures:
         details = "; ".join(
             f"{entry.get('embeddingType', 'UNKNOWN')}: status={entry.get('status', 'UNKNOWN')}"
-            + (f", reason={entry['failureReason']}" if entry.get("failureReason") else "")
+            + _failure_detail(entry)
             for entry in failures
         )
         raise Exception(
             f"Async embedding job reported {len(failures)} failed result(s): {details}"
         )
 
+    missing_uri = [e for e in entries if not e.get("outputFileUri")]
+    if missing_uri:
+        types = ", ".join(e.get("embeddingType", "UNKNOWN") for e in missing_uri)
+        raise Exception(
+            f"Async embedding job manifest is malformed: {len(missing_uri)} SUCCESS "
+            f"result(s) missing outputFileUri ({types})"
+        )
+
     results = []
+    segment_failures = []
     for entry in entries:
-        output_uri = entry.get("outputFileUri")
-        if not output_uri:
-            continue
+        output_uri = entry["outputFileUri"]
         jsonl_bucket, jsonl_key = parse_s3_uri(output_uri)
         jsonl_content = read_text(jsonl_bucket, jsonl_key)
-        embedding_type = entry.get("embeddingType")
+        embedding_type = entry.get("embeddingType", "UNKNOWN")
         for line in jsonl_content.strip().split("\n"):
             if not line.strip():
                 continue
             item = json.loads(line)
+            # Per-segment status: absent means success; anything other than
+            # SUCCESS is a failed segment and must not be dropped or stored.
+            line_status = item.get("status")
+            if line_status is not None and line_status != "SUCCESS":
+                segment_index = (item.get("segmentMetadata") or {}).get("segmentIndex", "?")
+                segment_failures.append(
+                    f"{embedding_type} segment {segment_index}: status={line_status}"
+                    + _failure_detail(item)
+                )
+                continue
             result_dict = {"embedding": item.get("embedding", [])}
-            if embedding_type:
-                result_dict["embeddingType"] = embedding_type
+            if entry.get("embeddingType"):
+                result_dict["embeddingType"] = entry["embeddingType"]
             for key, value in item.items():
                 if key != "embedding":
                     result_dict[key] = value
             results.append(result_dict)
+
+    if segment_failures:
+        raise Exception(
+            f"Async embedding job reported {len(segment_failures)} failed segment(s): "
+            + "; ".join(segment_failures)
+        )
     return results
+
+
+def _failure_detail(item):
+    """Format optional failureReason/message from a manifest entry or JSONL line."""
+    detail = ""
+    if item.get("failureReason"):
+        detail += f", reason={item['failureReason']}"
+    if item.get("message"):
+        detail += f", message={item['message']}"
+    return detail
 
 
 def build_twelvelabs_result_metadata(result):
@@ -402,7 +449,11 @@ class SupportedModel(Enum):
                     "singleEmbeddingParams": {
                         "embeddingPurpose": "{resolved.embeddingPurpose}",
                         "embeddingDimension": "{index.dimensions}",
-                        "image": "{content_source}"
+                        "image": {
+                            "detailLevel": "{resolved.detailLevel}",
+                            "format": "{content_source.format}",
+                            "source": "{content_source.source}"
+                        }
                     }
                 },
                 "video": {
@@ -411,7 +462,11 @@ class SupportedModel(Enum):
                     "singleEmbeddingParams": {
                         "embeddingPurpose": "{resolved.embeddingPurpose}",
                         "embeddingDimension": "{index.dimensions}",
-                        "video": "{content_source}"
+                        "video": {
+                            "format": "{content_source.format}",
+                            "source": "{content_source.source}",
+                            "embeddingMode": "{resolved.embeddingMode}"
+                        }
                     }
                 },
                 "audio": {
@@ -420,7 +475,10 @@ class SupportedModel(Enum):
                     "singleEmbeddingParams": {
                         "embeddingPurpose": "{resolved.embeddingPurpose}",
                         "embeddingDimension": "{index.dimensions}",
-                        "audio": "{content_source}"
+                        "audio": {
+                            "format": "{content_source.format}",
+                            "source": "{content_source.source}"
+                        }
                     }
                 }
             },
@@ -444,7 +502,11 @@ class SupportedModel(Enum):
                     "segmentedEmbeddingParams": {
                         "embeddingPurpose": "{resolved.embeddingPurpose}",
                         "embeddingDimension": "{index.dimensions}",
-                        "image": "{content_source}"
+                        "image": {
+                            "format": "{content_source.format}",
+                            "source": "{content_source.source}",
+                            "detailLevel": "{resolved.detailLevel}"
+                        }
                     }
                 },
                 "video": {
@@ -453,7 +515,12 @@ class SupportedModel(Enum):
                     "segmentedEmbeddingParams": {
                         "embeddingPurpose": "{resolved.embeddingPurpose}",
                         "embeddingDimension": "{index.dimensions}",
-                        "video": "{content_source}"
+                        "video": {
+                            "format": "{content_source.format}",
+                            "source": "{content_source.source}",
+                            "embeddingMode": "{resolved.embeddingMode}",
+                            "segmentationConfig": "{resolved.segmentationConfig}"
+                        }
                     }
                 },
                 "audio": {
@@ -462,31 +529,36 @@ class SupportedModel(Enum):
                     "segmentedEmbeddingParams": {
                         "embeddingPurpose": "{resolved.embeddingPurpose}",
                         "embeddingDimension": "{index.dimensions}",
-                        "audio": "{content_source}"
+                        "audio": {
+                            "format": "{content_source.format}",
+                            "source": "{content_source.source}",
+                            "segmentationConfig": "{resolved.segmentationConfig}"
+                        }
                     }
                 }
             }
         },
         response_embedding_path="embeddings",  # List of embedding objects
+        # segmentationConfig is a required wrapper in the documented async
+        # schema for text, audio and video. Its inner fields (maxLengthChars,
+        # durationSeconds) are optional, so the wrapper is left empty and
+        # Bedrock applies its own defaults rather than the CLI hardcoding them.
+        # Only the async schemas reference {resolved.segmentationConfig}, so
+        # the wrapper never appears in sync payloads.
         query_defaults={
-            # segmentationConfig is a required wrapper for async text, but
-            # maxLengthChars is optional — leave it empty so Bedrock applies
-            # its own default (32,000) instead of hardcoding it here.
             "text": {"embeddingPurpose": "TEXT_RETRIEVAL", "truncationMode": "END", "segmentationConfig": {}},
             "image": {"embeddingPurpose": "IMAGE_RETRIEVAL"},
-            "video": {"embeddingPurpose": "VIDEO_RETRIEVAL", "embeddingMode": "AUDIO_VIDEO_COMBINED"},
-            "audio": {"embeddingPurpose": "AUDIO_RETRIEVAL"},
+            "video": {"embeddingPurpose": "VIDEO_RETRIEVAL", "embeddingMode": "AUDIO_VIDEO_COMBINED", "segmentationConfig": {}},
+            "audio": {"embeddingPurpose": "AUDIO_RETRIEVAL", "segmentationConfig": {}},
         },
         put_defaults={
-            # segmentationConfig required wrapper only; empty maxLengthChars
-            # lets Bedrock apply its default (32,000) rather than hardcoding.
             "text": {"embeddingPurpose": "GENERIC_INDEX", "truncationMode": "END", "segmentationConfig": {}},
             "image": {"embeddingPurpose": "GENERIC_INDEX"},
-            "video": {"embeddingPurpose": "GENERIC_INDEX", "embeddingMode": "AUDIO_VIDEO_COMBINED"},
-            "audio": {"embeddingPurpose": "GENERIC_INDEX"},
+            "video": {"embeddingPurpose": "GENERIC_INDEX", "embeddingMode": "AUDIO_VIDEO_COMBINED", "segmentationConfig": {}},
+            "audio": {"embeddingPurpose": "GENERIC_INDEX", "segmentationConfig": {}},
         },
     ))
-    
+
     # TwelveLabs Models
     TWELVELABS_MARENGO_V2_7 = ("twelvelabs.marengo-embed-2-7-v1:0", ModelCapabilities(
         supported_modalities=["text", "image", "video", "audio"],
@@ -604,10 +676,10 @@ class SupportedModel(Enum):
         
         # Determine processing mode
         is_async_mode = bool(async_config and async_config.get("output_s3_uri"))
-        
+
         # Resolve operation defaults merged with user params
         resolved_params = self._resolve_operation_params(content_type, user_params, operation)
-        
+
         # Create context for schema substitution
         context = {
             "model_id": self.model_id,
@@ -619,33 +691,24 @@ class SupportedModel(Enum):
             "async_config": async_config or {}
         }
         
-        # Build content source via the model's own builder function, if any
-        builder = self.capabilities.content_source_builder
-        if builder:
-            file_path = content.get("file_path", "")
-            src_bucket_owner = async_config.get("src_bucket_owner") if async_config else None
-            if file_path:
-                source = builder(self.capabilities, file_path, src_bucket_owner,
-                                 content, resolved_params, content_type)
-                # Schemas reference either {content_source} (Nova) or
-                # {media_source} (TwelveLabs); both map to the same object.
-                context["content_source"] = source
-                context["media_source"] = source
-            elif content_type == "text" and is_async_mode and content.get("text"):
-                # Some models (e.g., Nova segmented) use a source object for
-                # async text instead of an inline value. Only build the
-                # content_source if the schema actually references it — models
-                # that use {content.text} directly (e.g., TwelveLabs) don't need
-                # one and would break if we tried to encode an empty file_path.
-                text_schema = self._select_schema(content_type, is_async_mode)
-                if self._schema_references_template(text_schema, "content_source"):
-                    context["content_source"] = builder(
-                        self.capabilities, "", src_bucket_owner,
-                        content, resolved_params, content_type
-                    )
-        
         # Select schema (sync/async aware)
         schema = self._select_schema(content_type, is_async_mode)
+
+        # Build content source via the model's own builder function, but only
+        # when the selected schema actually references it. Schemas that inline
+        # the value directly (e.g. {content.text} for sync text) never need a
+        # source object, so the builder is not invoked for them.
+        builder = self.capabilities.content_source_builder
+        if builder and (self._schema_references_template(schema, "content_source")
+                        or self._schema_references_template(schema, "media_source")):
+            file_path = content.get("file_path", "")
+            src_bucket_owner = async_config.get("src_bucket_owner") if async_config else None
+            source = builder(self.capabilities, file_path, src_bucket_owner,
+                             content, resolved_params, content_type)
+            # Schemas reference either {content_source} (Nova) or
+            # {media_source} (TwelveLabs); both map to the same object.
+            context["content_source"] = source
+            context["media_source"] = source
         
         # Apply schema to get system payload
         system_payload = self._apply_schema(schema, context)
@@ -660,23 +723,24 @@ class SupportedModel(Enum):
         if self.capabilities.content_source_params:
             consumed_keys.update(self.capabilities.content_source_params)
         merge_params = {k: v for k, v in user_params.items() if k not in consumed_keys}
-        
+
         # Deep merge remaining user parameters into system payload
         return self._deep_merge(system_payload, merge_params)
-    
+
     def _schema_references_template(self, schema: Any, template_name: str) -> bool:
-        """Check if a schema references a given template variable like {content_source}."""
+        """Check if a schema references a template variable, either whole
+        ({content_source}) or by sub-path ({content_source.format})."""
         if isinstance(schema, dict):
             return any(self._schema_references_template(v, template_name) for v in schema.values())
         elif isinstance(schema, list):
             return any(self._schema_references_template(item, template_name) for item in schema)
         elif isinstance(schema, str):
-            return schema == f"{{{template_name}}}"
+            return schema == f"{{{template_name}}}" or schema.startswith(f"{{{template_name}.")
         return False
 
     def _collect_resolved_keys(self, schema: Any) -> set:
         """Collect user-param keys consumed by the schema via {resolved.X} templates.
-        
+
         Walks the schema template recursively and returns the set of top-level
         keys referenced through the 'resolved' context (which is the merge of
         operation defaults and user params). These keys are already substituted
@@ -696,7 +760,7 @@ class SupportedModel(Enum):
             if path.startswith("resolved."):
                 keys.add(path.split(".")[1])
         return keys
-    
+
     def _resolve_operation_params(self, content_type: str, user_params: dict,
                                   operation: str = "put") -> dict:
         """Merge operation defaults with user params. User params win."""
@@ -704,41 +768,41 @@ class SupportedModel(Enum):
                         else self.capabilities.put_defaults)
         if not defaults_map:
             return user_params.copy()
-        
+
         defaults = defaults_map.get(content_type, {})
         merged = defaults.copy()
         merged.update(user_params)
         return merged
-    
+
     def _select_schema(self, content_type: str, is_async_mode: bool) -> dict:
         """Select the correct schema branch for content_type and sync/async mode."""
         schema = self.capabilities.payload_schema
-        
+
         if isinstance(schema, dict):
             # Check for sync/async top-level keys
             if "sync" in schema and "async" in schema:
                 mode_key = "async" if is_async_mode else "sync"
                 schema = schema[mode_key]
-            
+
             # Check for content_type sub-key
             if content_type in schema:
                 schema = schema[content_type]
-        
+
         return schema
     
     def extract_embedding(self, response: dict) -> Any:
         """Extract embedding(s) from model response.
-        
+
         Returns either:
         - List[float]: single embedding vector
         - List[Dict]: list of embedding result objects (for multi-embedding responses)
         """
         result = self._extract_by_path(response, self.capabilities.response_embedding_path)
-        
+
         # If result is a list of dicts (multi-embedding), return as-is
         if isinstance(result, list) and result and isinstance(result[0], dict):
             return result  # e.g., [{"embedding": [...], "embeddingType": "VIDEO"}, ...]
-        
+
         return result  # Single embedding vector
     
     def _apply_schema(self, schema: Any, context: dict) -> Any:
