@@ -6,7 +6,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from s3vectors.core.services import BedrockService, S3VectorService
 from s3vectors.core.unified_processor import UnifiedProcessor
 from s3vectors.utils.config import get_region, get_current_account_id
-from s3vectors.utils.models import get_model_info, validate_user_parameters, prepare_processing_input, determine_content_type, validate_index_dimensions
+from s3vectors.utils.models import get_model_info, validate_user_parameters, prepare_processing_input, determine_content_type
 from s3vectors.core.streaming_batch_orchestrator import StreamingBatchOrchestrator
 
 
@@ -141,13 +141,6 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
                 raise click.ClickException(f"Could not determine dimensions for index {index_name}")
         except Exception as e:
             raise click.ClickException(f"Failed to get index information: {str(e)}")
-        
-        # Fail fast if the index dimension isn't supported by the model,
-        # instead of letting Bedrock reject the request with an opaque error.
-        try:
-            validate_index_dimensions(model, index_dimensions)
-        except ValueError as e:
-            raise click.ClickException(str(e))
         
         # Prepare processing input
         processing_input = prepare_processing_input(

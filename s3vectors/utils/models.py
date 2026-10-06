@@ -134,7 +134,6 @@ class ModelCapabilities:
     put_defaults: Dict[str, Dict[str, Any]] = None  # Default params applied during put operations, keyed by content_type
 
     # Model constraints
-    supported_dimensions: List[int] = None  # Valid index dimensions; enforced by validate_index_dimensions()
     content_source_params: List[str] = None  # User-overridable param keys that belong inside the modality object (e.g., ["embeddingMode", "detailLevel", "segmentationConfig"]); placed there by the schema via {resolved.X} and excluded from the root-level merge
 
 
@@ -340,7 +339,6 @@ class SupportedModel(Enum):
     TITAN_TEXT_V1 = ("amazon.titan-embed-text-v1", ModelCapabilities(
         supported_modalities=["text"],
         description="Amazon Titan Text Embeddings v1",
-        supported_dimensions=[1536],
         payload_schema={"inputText": "{content.text}"},
         response_embedding_path="embedding"
     ))
@@ -348,7 +346,6 @@ class SupportedModel(Enum):
     TITAN_TEXT_V2 = ("amazon.titan-embed-text-v2:0", ModelCapabilities(
         supported_modalities=["text"],
         description="Amazon Titan Text Embeddings v2",
-        supported_dimensions=[256, 512, 1024],
         payload_schema={
             "inputText": "{content.text}",
             "dimensions": "{index.dimensions}"
@@ -361,7 +358,6 @@ class SupportedModel(Enum):
         supported_modalities=["text", "image"],
         description="Amazon Titan Multimodal Embeddings v1",
         supports_multimodal_input=True,
-        supported_dimensions=[256, 384, 1024],
         payload_schema={
             "text": {
                 "inputText": "{content.text}",
@@ -385,7 +381,6 @@ class SupportedModel(Enum):
     COHERE_ENGLISH_V3 = ("cohere.embed-english-v3", ModelCapabilities(
         supported_modalities=["text", "image"],
         description="Cohere Embed English v3",
-        supported_dimensions=[1024],
         payload_schema={
             "text": {
                 "texts": ["{content.text}"],
@@ -402,7 +397,6 @@ class SupportedModel(Enum):
     COHERE_MULTILINGUAL_V3 = ("cohere.embed-multilingual-v3", ModelCapabilities(
         supported_modalities=["text", "image"],
         description="Cohere Embed Multilingual v3",
-        supported_dimensions=[1024],
         payload_schema={
             "text": {
                 "texts": ["{content.text}"],
@@ -423,7 +417,6 @@ class SupportedModel(Enum):
         supported_modalities=["text", "image", "video", "audio"],
         description="Amazon Nova Multimodal Embeddings v1",
         supports_multimodal_input=False,  # One modality per request
-        supported_dimensions=[256, 384, 1024, 3072],
         async_requires_s3_source=True,
         content_source_builder=build_nova_content_source,
         async_result_parser=parse_nova_async_results,
@@ -563,7 +556,6 @@ class SupportedModel(Enum):
     TWELVELABS_MARENGO_V2_7 = ("twelvelabs.marengo-embed-2-7-v1:0", ModelCapabilities(
         supported_modalities=["text", "image", "video", "audio"],
         description="TwelveLabs Marengo Embed 2.7 v1",
-        supported_dimensions=[1024],
         max_local_file_size=36 * 1024 * 1024,  # 36MB limit for local files
         payload_schema={
             "text": {
@@ -908,22 +900,6 @@ def validate_user_parameters(system_payload: Dict[str, Any], user_params: Dict[s
 def get_model_info(model_id: str) -> Optional[SupportedModel]:
     """Get model information from model ID."""
     return SupportedModel.from_model_id(model_id)
-
-
-def validate_index_dimensions(model: SupportedModel, index_dimensions: int) -> None:
-    """Validate the index dimension against the model's supported dimensions.
-
-    Fails fast with a clear message instead of letting Bedrock reject the
-    request with an opaque "Malformed input request" error.
-    """
-    supported = model.capabilities.supported_dimensions
-    if supported and index_dimensions not in supported:
-        supported_str = ", ".join(str(d) for d in supported)
-        raise ValueError(
-            f"Index dimension {index_dimensions} is not supported by {model.model_id}. "
-            f"Supported dimensions: {supported_str}. "
-            f"Use an index whose dimension matches the model."
-        )
 
 
 def validate_model_modality(model_id: str, modality: str) -> None:
