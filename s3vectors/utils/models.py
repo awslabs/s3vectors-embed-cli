@@ -533,22 +533,27 @@ class SupportedModel(Enum):
         },
         response_embedding_path="embeddings",  # List of embedding objects
         # segmentationConfig is a required wrapper in the documented async
-        # schema for text, audio and video. Its inner fields (maxLengthChars,
-        # durationSeconds) are optional, so the wrapper is left empty and
-        # Bedrock applies its own defaults rather than the CLI hardcoding them.
+        # schema for text, audio and video. The docs mark its inner fields
+        # optional, but live Bedrock behaves differently per modality:
+        #   - text: an empty wrapper is accepted and Bedrock applies its
+        #     maxLengthChars default (32000), so no value is sent.
+        #   - audio/video: an empty wrapper is rejected with
+        #     "segmentationConfig: required key [durationSeconds] not found",
+        #     so the documented default (5 s, valid range 1-30) is sent
+        #     explicitly. A user-supplied segmentationConfig replaces it.
         # Only the async schemas reference {resolved.segmentationConfig}, so
         # the wrapper never appears in sync payloads.
         query_defaults={
             "text": {"embeddingPurpose": "TEXT_RETRIEVAL", "truncationMode": "END", "segmentationConfig": {}},
             "image": {"embeddingPurpose": "IMAGE_RETRIEVAL"},
-            "video": {"embeddingPurpose": "VIDEO_RETRIEVAL", "embeddingMode": "AUDIO_VIDEO_COMBINED", "segmentationConfig": {}},
-            "audio": {"embeddingPurpose": "AUDIO_RETRIEVAL", "segmentationConfig": {}},
+            "video": {"embeddingPurpose": "VIDEO_RETRIEVAL", "embeddingMode": "AUDIO_VIDEO_COMBINED", "segmentationConfig": {"durationSeconds": 5}},
+            "audio": {"embeddingPurpose": "AUDIO_RETRIEVAL", "segmentationConfig": {"durationSeconds": 5}},
         },
         put_defaults={
             "text": {"embeddingPurpose": "GENERIC_INDEX", "truncationMode": "END", "segmentationConfig": {}},
             "image": {"embeddingPurpose": "GENERIC_INDEX"},
-            "video": {"embeddingPurpose": "GENERIC_INDEX", "embeddingMode": "AUDIO_VIDEO_COMBINED", "segmentationConfig": {}},
-            "audio": {"embeddingPurpose": "GENERIC_INDEX", "segmentationConfig": {}},
+            "video": {"embeddingPurpose": "GENERIC_INDEX", "embeddingMode": "AUDIO_VIDEO_COMBINED", "segmentationConfig": {"durationSeconds": 5}},
+            "audio": {"embeddingPurpose": "GENERIC_INDEX", "segmentationConfig": {"durationSeconds": 5}},
         },
     ))
 
