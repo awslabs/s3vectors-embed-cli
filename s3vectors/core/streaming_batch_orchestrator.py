@@ -325,14 +325,14 @@ class StreamingBatchOrchestrator:
                     failed_files_count += 1
                     errors.append(f"Error processing {file_path}: {str(e)}")
                     continue
-                
+
                 if not (result and result.vectors):
                     failed_files_count += 1
                     errors.append(f"No vectors generated for {file_path}")
                     continue
-                
+
                 file_vector_count = len(result.vectors)
-                
+
                 if per_file_storage:
                     # Video/audio: this file's clips go in their own call(s).
                     try:
@@ -356,12 +356,12 @@ class StreamingBatchOrchestrator:
                     pooled_files.append(file_path)
                     if len(pooled_vectors) >= store_size:
                         flush_pooled()
-                    
+
                     if completed_files % 100 == 0:
                         print(f"Progress: {completed_files}/{total_files} files processed "
                               f"({processed_files_count} stored, {failed_files_count} failed, "
                               f"{len(pooled_files)} pending store)")
-        
+
         # Write whatever is left in the pool after the last file completes.
         flush_pooled()
         

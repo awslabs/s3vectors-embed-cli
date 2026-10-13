@@ -93,12 +93,12 @@ class BedrockService:
         # ARN format: arn:aws:bedrock:region:account:async-invoke/job-id
         return invocation_arn.split('/')[-1]
 
-    def embed_async_with_payload(self, model, final_payload: Dict[str, Any], 
+    def embed_async_with_payload(self, model, final_payload: Dict[str, Any],
                                async_output_s3_uri: str) -> tuple[List[Dict], str]:
         """Handle async embedding with model object, final payload, and output S3 URI."""
         if not model.capabilities.supports_async:
             raise ValueError(f"Model {model.model_id} does not support async processing")
-        
+
         model_id = model.model_id
         
         # Construct complete payload for start_async_invoke
