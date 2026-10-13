@@ -117,7 +117,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
             raise click.ClickException(str(e))
     
     # Check async model requirements
-    if model.is_async() and not async_output_s3_uri:
+    if not model.capabilities.supports_sync and not async_output_s3_uri:
         raise click.ClickException(
             f"Async models like {model.model_id} require --async-output-s3-uri parameter."
         )
@@ -162,7 +162,8 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
             progress.add_task("Processing input...", total=None)
             result = processor.process(
                 model, processing_input, user_bedrock_params, 
-                async_output_s3_uri, src_bucket_owner, vector_bucket_name, index_name, index_dimensions
+                async_output_s3_uri, src_bucket_owner, vector_bucket_name, index_name, index_dimensions,
+                operation="put"
             )
             
             # Store vectors with batch_size handling
@@ -267,28 +268,6 @@ def _process_streaming_batch(file_path, content_type, vector_bucket_name, index_
     except Exception as e:
         console.print(f"[red]Streaming batch processing failed: {str(e)}[/red]")
         raise click.ClickException(f"Streaming batch processing failed: {str(e)}")
-        
-        # Prepare output in unified format
-        result = {
-            "type": "batch",
-            "bucket": vector_bucket_name,
-            "index": index_name,
-            "model": model.model_id,
-            "contentType": content_type,
-            "totalFiles": batch_result.total_files,
-            "processedFiles": batch_result.processed_count,  # Note: processed_count not processed_files
-            "failedFiles": batch_result.failed_count,
-            "totalVectors": batch_result.processed_count,    # Each file = 1 vector
-            "vectorKeys": batch_result.processed_keys
-        }
-        
-        if output == "table":
-            _display_batch_table(result, console)
-        else:
-            console.print_json(data=result)
-        
-    except Exception as e:
-        raise click.ClickException(f"Failed to process batch {file_path}: {str(e)}")
 
 
 def _display_batch_table(result, console):
