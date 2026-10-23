@@ -10,6 +10,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from s3vectors.utils.boto_config import get_boto_config, get_user_agent
+from s3vectors.utils.models import AsyncOutput
 
 
 class BedrockService:
@@ -40,8 +41,11 @@ class BedrockService:
         if self.debug and self.console:
             self.console.print(f"[dim] {message}[/dim]")
     
-    def embed_with_payload(self, model, payload: Dict[str, Any]) -> List[float]:
-        """Embed using direct Bedrock API payload for sync models."""
+    def embed_with_payload(self, model, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Sync embedding via invoke_model.
+
+        Returns the model's parsed results: [{"embedding": [...], "metadata": {...}}, ...].
+        """
         start_time = time.time()
         model_id = model.model_id
         self._debug_log(f"Starting embedding with model: {model_id}")
@@ -64,14 +68,13 @@ class BedrockService:
             if self.debug and self.console:
                 self._debug_log(f"Response body keys: {list(response_body.keys())}")
             
-            # Extract embedding using schema-based approach
-            embedding = model.extract_embedding(response_body)
+            results = model.parse_response(response_body)
             
-            self._debug_log(f"Generated embedding with {len(embedding)} dimensions")
+            self._debug_log(f"Generated {len(results)} embedding(s)")
             total_time = time.time() - start_time
             self._debug_log(f"Total embedding operation completed in {total_time:.2f} seconds")
             
-            return embedding
+            return results
             
         except ClientError as e:
             self._debug_log(f"Bedrock ClientError: {str(e)}")
@@ -79,14 +82,6 @@ class BedrockService:
         except Exception as e:
             self._debug_log(f"Unexpected error in embed_with_payload: {str(e)}")
             raise
-    
-    def embed_with_payload_raw(self, model, payload: Dict[str, Any]) -> Dict[str, Any]:
-        """Invoke model and return full response body."""
-        body = json.dumps(payload)
-        response = self.bedrock_runtime.invoke_model(
-            modelId=model.model_id, body=body, contentType='application/json'
-        )
-        return json.loads(response['body'].read())
 
     def _extract_job_id_from_arn(self, invocation_arn: str) -> str:
         """Extract Bedrock job ID from invocation ARN."""
@@ -174,39 +169,8 @@ class BedrockService:
         if poll_count >= max_polls:
             raise Exception("Async job timed out after 30 minutes")
         
-        # Retrieve results from S3 using the model's own result parser
-        return self._get_async_results_from_s3(output_s3_uri, model)
-    
-    def _get_async_results_from_s3(self, output_s3_uri: str, model) -> list:
-        """Get async results from S3 using the model's own result parser."""
-        parser = model.capabilities.async_result_parser
-        if not parser:
-            raise ValueError(f"Model {model.model_id} has no async result parser configured")
-        
-        bucket, prefix = self._parse_s3_uri(output_s3_uri)
-        # Ensure prefix ends with /
-        if prefix and not prefix.endswith('/'):
-            prefix += '/'
-        
-        return parser(self._read_s3_json, self._read_s3_text, self._parse_s3_uri, bucket, prefix)
-
-    def _parse_s3_uri(self, s3_uri: str):
-        """Parse S3 URI into (bucket, key)."""
-        path = s3_uri.replace("s3://", "")
-        parts = path.split("/", 1)
-        bucket = parts[0]
-        key = parts[1] if len(parts) > 1 else ""
-        return bucket, key
-
-    def _read_s3_json(self, bucket: str, key: str) -> dict:
-        """Read and parse a JSON file from S3."""
-        response = self.s3_client.get_object(Bucket=bucket, Key=key)
-        return json.loads(response['Body'].read().decode('utf-8'))
-
-    def _read_s3_text(self, bucket: str, key: str) -> str:
-        """Read a text file from S3."""
-        response = self.s3_client.get_object(Bucket=bucket, Key=key)
-        return response['Body'].read().decode('utf-8')
+        # The model's response_parser reads whatever files it expects from the job output
+        return model.parse_response(AsyncOutput(self.s3_client, output_s3_uri))
 
 
 class S3VectorService:

@@ -6,7 +6,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from s3vectors.core.services import BedrockService, S3VectorService
 from s3vectors.core.unified_processor import UnifiedProcessor
 from s3vectors.utils.config import get_region, get_current_account_id
-from s3vectors.utils.models import get_model_info, validate_user_parameters, prepare_processing_input, determine_content_type
+from s3vectors.utils.models import get_model_info, prepare_processing_input, validate_model_modality, determine_content_type
 from s3vectors.core.streaming_batch_orchestrator import StreamingBatchOrchestrator
 
 
@@ -107,12 +107,7 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
     # Early validation of user parameters before any processing
     if user_bedrock_params:
         try:
-            content_type = determine_content_type(text_value, text, image, video, audio)
-            system_keys = model.get_system_keys(content_type)
-            system_payload = {key: None for key in system_keys}  # Dummy values for validation
-            
-            # Validate using utility function
-            validate_user_parameters(system_payload, user_bedrock_params)
+            model.validate_user_params(user_bedrock_params)
         except ValueError as e:
             raise click.ClickException(str(e))
     
@@ -124,6 +119,13 @@ def embed_put(ctx, vector_bucket_name, index_name, model_id, text_value, text, i
     
     # Validate inputs
     is_multimodal = _validate_inputs(text_value, text, image, video, audio, model, key, filename_as_key)
+    
+    # Reject unsupported modalities here rather than as an opaque Bedrock error
+    if not is_multimodal:
+        try:
+            validate_model_modality(model_id, determine_content_type(text_value, text, image, video, audio))
+        except ValueError as e:
+            raise click.ClickException(str(e))
     
     try:
         # Initialize services

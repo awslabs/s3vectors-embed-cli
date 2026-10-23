@@ -1,7 +1,14 @@
 """Multimodal helper utilities for async models handling audio, video, text, image content."""
 
 import base64
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
+
+
+def parse_s3_uri(s3_uri: str) -> Tuple[str, str]:
+    """Split an s3://bucket/key URI into (bucket, key). Key may be empty."""
+    path = s3_uri[5:] if s3_uri.startswith("s3://") else s3_uri
+    bucket, _, key = path.partition("/")
+    return bucket, key
 
 
 def is_local_path(file_path: str) -> bool:
