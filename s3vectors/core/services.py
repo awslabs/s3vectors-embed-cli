@@ -154,8 +154,7 @@ class BedrockService:
                 if status == 'Completed':
                     break
                 elif status == 'Failed':
-                    failure_message = response.get('failureMessage', 'Unknown error')
-                    raise Exception(f"Async embedding failed: {failure_message}")
+                    raise Exception(self._describe_async_failure(response, output_s3_uri, model))
                 elif status in ['InProgress', 'Submitted']:
                     time.sleep(10)  # Wait 10 seconds before next poll
                     poll_count += 1
@@ -171,6 +170,24 @@ class BedrockService:
         
         # The model's response_parser reads whatever files it expects from the job output
         return model.parse_response(AsyncOutput(self.s3_client, output_s3_uri))
+
+    def _describe_async_failure(self, job: Dict[str, Any], output_s3_uri: str, model) -> str:
+        """Best available reason for a job Bedrock reports as Failed.
+
+        The job record's failureMessage is sometimes empty or just an exception
+        name, while the model may still have written its result manifest with a
+        failureReason and a human-readable message (Nova: INVALID_CONTENT,
+        RAI_VIOLATION_*, ...). Let the model's parser read that first; it raises
+        with the detail. Fall back to the job record, never to an empty string.
+        """
+        try:
+            model.parse_response(AsyncOutput(self.s3_client, output_s3_uri))
+        except Exception as e:
+            detail = str(e).strip()
+            if detail and "NoSuchKey" not in detail and "Not Found" not in detail:
+                return f"Async embedding failed: {detail}"
+        message = (job.get('failureMessage') or '').strip()
+        return f"Async embedding failed: {message or 'Bedrock reported the job as Failed without a failure message'}"
 
 
 class S3VectorService:
