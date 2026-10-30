@@ -156,7 +156,7 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
             validate_model_modality(model_id, content_type)
         
         # Validate async model requirements
-        if model.is_async() and not async_output_s3_uri:
+        if not model.capabilities.supports_sync and not async_output_s3_uri:
             raise click.ClickException(
                 f"Async models like {model.model_id} require --async-output-s3-uri parameter."
             )
@@ -168,6 +168,10 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
                 user_bedrock_params = json.loads(bedrock_inference_params)
             except json.JSONDecodeError as e:
                 raise click.ClickException(f"Invalid JSON in --bedrock-inference-params: {e}")
+            try:
+                model.validate_user_params(user_bedrock_params)
+            except ValueError as e:
+                raise click.ClickException(str(e))
         
         # Parse filter expression
         metadata_filter = None
@@ -206,7 +210,7 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
         # Process query input to generate embedding (same as PUT)
         with console.status("[bold green]Generating query embedding..."):
             # Validate TwelveLabs query parameters for video/audio
-            if model.is_async() and processing_input.content_type in ["video", "audio"]:
+            if not model.capabilities.supports_sync and processing_input.content_type in ["video", "audio"]:
                 if not user_bedrock_params:
                     user_bedrock_params = {}
                 
@@ -239,32 +243,24 @@ def embed_query(ctx, vector_bucket_name, index_name, model_id, query_input, text
                 user_bedrock_params=user_bedrock_params,
                 async_output_s3_uri=async_output_s3_uri,
                 src_bucket_owner=src_bucket_owner,
-                precomputed_dimensions=index_dimensions
+                precomputed_dimensions=index_dimensions,
+                operation="query"
             )
         
-        # Extract query embedding (TwelveLabs returns multiple, use first for query)
-        query_timing = {}  # Store timing info for summary
-        
-        # For TwelveLabs, capture timing info from raw result before vector processing
-        if model.is_async() and processing_input.content_type in ["video", "audio"] and hasattr(result, 'raw_results'):
-            if result.raw_results and len(result.raw_results) > 0:
-                first_raw = result.raw_results[0]
-                if "startSec" in first_raw:
-                    query_timing["queryStartSec"] = first_raw["startSec"]
-                if "endSec" in first_raw:
-                    query_timing["queryEndSec"] = first_raw["endSec"]
-        
-        if hasattr(result, 'vectors') and result.vectors:
-            # Get the embedding from the first vector
-            first_vector = result.vectors[0]
-            if "embedding" in first_vector:
-                query_embedding = first_vector["embedding"]
-            elif "data" in first_vector and "float32" in first_vector["data"]:
-                query_embedding = first_vector["data"]["float32"]
-            else:
-                raise click.ClickException(f"No embedding found in result. Available keys: {list(first_vector.keys())}")
-        else:
+        # Use the first embedding as the query vector (video/audio models may return several clips)
+        if not result.vectors:
             raise click.ClickException("Failed to generate query embedding - no vectors returned")
+        first_vector = result.vectors[0]
+        query_embedding = first_vector["data"]["float32"]
+        
+        # Report the clip window the query embedding covers, when the model provides one
+        query_timing = {}
+        first_metadata = first_vector.get("metadata", {})
+        if processing_input.content_type in ["video", "audio"]:
+            if "S3VECTORS-EMBED-START-SEC" in first_metadata:
+                query_timing["queryStartSec"] = first_metadata["S3VECTORS-EMBED-START-SEC"]
+            if "S3VECTORS-EMBED-END-SEC" in first_metadata:
+                query_timing["queryEndSec"] = first_metadata["S3VECTORS-EMBED-END-SEC"]
         
         # Perform vector similarity search
         with console.status("[bold green]Searching for similar vectors..."):

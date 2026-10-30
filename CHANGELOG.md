@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-29
+
+### Added
+- Amazon Nova Multimodal Embeddings (`amazon.nova-2-multimodal-embeddings-v1:0`) support for text, image, video and audio inputs
+- Sync (InvokeModel) and async (StartAsyncInvoke) processing for Nova; async is used when `--async-output-s3-uri` is provided, and accepts S3 inputs only
+- Nova embedding dimensions 256, 384, 1024 and 3072, taken from the target index dimension
+- Segmented embeddings for Nova async text, video and audio, stored with segment metadata (start/end seconds, character positions, segment index, embedding type)
+- Nova video embedding modes `AUDIO_VIDEO_COMBINED` (default) and `AUDIO_VIDEO_SEPARATE`
+- Separate Nova embedding purposes for indexing (`GENERIC_INDEX`) and querying (modality-specific `*_RETRIEVAL`)
+- Client-side rejection of `--bedrock-inference-params` that override system-controlled request fields
+- Client-side rejection of input modalities a model does not support
+
+### Changed
+- `--bedrock-inference-params` is deep-merged into the model's request in its native shape, e.g. `{"singleEmbeddingParams": {"text": {"truncationMode": "START"}}}` for Nova; Titan, Cohere and TwelveLabs requests are flat, so their parameters are unaffected
+- Model request building and response parsing moved to per-model functions; requests sent for existing models are unchanged
+
+### Fixed
+- Failed async jobs and failed Nova segments report the model's failure reason instead of storing a partial result or printing an empty error
+
 ## [0.2.1] - 2025-01-12
 
 ### Added

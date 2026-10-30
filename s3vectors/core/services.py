@@ -10,7 +10,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from s3vectors.utils.boto_config import get_boto_config, get_user_agent
-from s3vectors.utils.models import get_model_info
+from s3vectors.utils.models import AsyncOutput
 
 
 class BedrockService:
@@ -41,13 +41,11 @@ class BedrockService:
         if self.debug and self.console:
             self.console.print(f"[dim] {message}[/dim]")
     
-    def is_async_model(self, model_id: str) -> bool:
-        """Check if model requires async processing."""
-        model = get_model_info(model_id)
-        return model.is_async() if model else False
-    
-    def embed_with_payload(self, model, payload: Dict[str, Any]) -> List[float]:
-        """Embed using direct Bedrock API payload for sync models."""
+    def embed_with_payload(self, model, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Sync embedding via invoke_model.
+
+        Returns the model's parsed results: [{"embedding": [...], "metadata": {...}}, ...].
+        """
         start_time = time.time()
         model_id = model.model_id
         self._debug_log(f"Starting embedding with model: {model_id}")
@@ -70,14 +68,13 @@ class BedrockService:
             if self.debug and self.console:
                 self._debug_log(f"Response body keys: {list(response_body.keys())}")
             
-            # Extract embedding using schema-based approach
-            embedding = model.extract_embedding(response_body)
+            results = model.parse_response(response_body)
             
-            self._debug_log(f"Generated embedding with {len(embedding)} dimensions")
+            self._debug_log(f"Generated {len(results)} embedding(s)")
             total_time = time.time() - start_time
             self._debug_log(f"Total embedding operation completed in {total_time:.2f} seconds")
             
-            return embedding
+            return results
             
         except ClientError as e:
             self._debug_log(f"Bedrock ClientError: {str(e)}")
@@ -85,17 +82,19 @@ class BedrockService:
         except Exception as e:
             self._debug_log(f"Unexpected error in embed_with_payload: {str(e)}")
             raise
-    
+
     def _extract_job_id_from_arn(self, invocation_arn: str) -> str:
         """Extract Bedrock job ID from invocation ARN."""
         # ARN format: arn:aws:bedrock:region:account:async-invoke/job-id
         return invocation_arn.split('/')[-1]
 
-    def embed_async_with_payload(self, model_id: str, final_payload: Dict[str, Any], 
+    def embed_async_with_payload(self, model, final_payload: Dict[str, Any],
                                async_output_s3_uri: str) -> tuple[List[Dict], str]:
-        """Handle async embedding with model_id, final payload, and output S3 URI."""
-        if not self.is_async_model(model_id):
-            raise ValueError(f"Model {model_id} is not an async model")
+        """Handle async embedding with model object, final payload, and output S3 URI."""
+        if not model.capabilities.supports_async:
+            raise ValueError(f"Model {model.model_id} does not support async processing")
+
+        model_id = model.model_id
         
         # Construct complete payload for start_async_invoke
         complete_payload = {
@@ -128,7 +127,7 @@ class BedrockService:
             self._debug_log(f"Looking for results at: {output_s3_uri}")
             
             # Wait for completion and retrieve results
-            results = self._wait_and_retrieve_twelvelabs_results(invocation_arn, output_s3_uri)
+            results = self._wait_and_retrieve_async_results(invocation_arn, output_s3_uri, model)
             
             # Return results with job ID
             return results, job_id
@@ -137,9 +136,9 @@ class BedrockService:
             self._debug_log(f"Async embedding failed: {str(e)}")
             raise Exception(f"Async embedding failed: {e}")
 
-    def _wait_and_retrieve_twelvelabs_results(self, invocation_arn: str, output_s3_uri: str) -> List[Dict]:
-        """Wait for TwelveLabs job completion and retrieve results."""
-        self._debug_log(f"Waiting for TwelveLabs job completion: {invocation_arn}")
+    def _wait_and_retrieve_async_results(self, invocation_arn: str, output_s3_uri: str, model) -> List[Dict]:
+        """Wait for async job completion and retrieve results."""
+        self._debug_log(f"Waiting for async job completion: {invocation_arn}")
 
         # Poll job status
         poll_count = 0
@@ -155,8 +154,7 @@ class BedrockService:
                 if status == 'Completed':
                     break
                 elif status == 'Failed':
-                    failure_message = response.get('failureMessage', 'Unknown error')
-                    raise Exception(f"TwelveLabs async embedding failed: {failure_message}")
+                    raise Exception(self._describe_async_failure(response, output_s3_uri, model))
                 elif status in ['InProgress', 'Submitted']:
                     time.sleep(10)  # Wait 10 seconds before next poll
                     poll_count += 1
@@ -165,61 +163,31 @@ class BedrockService:
                     
             except ClientError as e:
                 self._debug_log(f"Error checking job status: {str(e)}")
-                raise Exception(f"Failed to check TwelveLabs job status: {e}")
+                raise Exception(f"Failed to check async job status: {e}")
         
         if poll_count >= max_polls:
-            raise Exception("TwelveLabs job timed out after 30 minutes")
+            raise Exception("Async job timed out after 30 minutes")
         
-        # Retrieve results from S3
-        return self._get_twelvelabs_results_from_s3(output_s3_uri)
-    
-    def _get_twelvelabs_results_from_s3(self, output_s3_uri: str) -> List[Dict]:
-        """Retrieve TwelveLabs results from S3 output location."""
-        # Parse S3 URI
-        if not output_s3_uri.startswith('s3://'):
-            raise ValueError(f"Invalid S3 URI: {output_s3_uri}")
-        
-        path_part = output_s3_uri[5:]  # Remove 's3://'
-        if '/' not in path_part:
-            raise ValueError(f"Invalid S3 URI format: {output_s3_uri}")
-        
-        bucket, prefix = path_part.split('/', 1)
-        
-        # TwelveLabs always outputs results to output.json
-        result_key = f"{prefix}/output.json" if not prefix.endswith('/') else f"{prefix}output.json"
-        
-        self._debug_log(f"Reading TwelveLabs results from s3://{bucket}/{result_key}")
-        
+        # The model's response_parser reads whatever files it expects from the job output
+        return model.parse_response(AsyncOutput(self.s3_client, output_s3_uri))
+
+    def _describe_async_failure(self, job: Dict[str, Any], output_s3_uri: str, model) -> str:
+        """Best available reason for a job Bedrock reports as Failed.
+
+        The job record's failureMessage is sometimes empty or just an exception
+        name, while the model may still have written its result manifest with a
+        failureReason and a human-readable message (Nova: INVALID_CONTENT,
+        RAI_VIOLATION_*, ...). Let the model's parser read that first; it raises
+        with the detail. Fall back to the job record, never to an empty string.
+        """
         try:
-            obj_response = self.s3_client.get_object(Bucket=bucket, Key=result_key)
-            result_data = json.loads(obj_response['Body'].read().decode('utf-8'))
-            
-            # Handle TwelveLabs format with 'data' array
-            if 'data' in result_data and isinstance(result_data['data'], list):
-                return result_data['data']
-            elif isinstance(result_data, list):
-                return result_data
-            else:
-                return [result_data]
-                
-        except ClientError as e:
-            self._debug_log(f"Error retrieving results from S3: {str(e)}")
-            raise Exception(f"Failed to retrieve TwelveLabs results from s3://{bucket}/{result_key}: {e}")
-    
-    def _has_embeddings(self, data):
-        """Check if the data contains embeddings."""
-        if isinstance(data, dict):
-            # Check for common embedding keys
-            embedding_keys = ['embedding', 'embeddings', 'vector', 'vectors']
-            if any(key in data for key in embedding_keys):
-                return True
-            # Check for TwelveLabs format with 'data' array
-            if 'data' in data and isinstance(data['data'], list):
-                return any(self._has_embeddings(item) for item in data['data'])
-        elif isinstance(data, list):
-            # Check if any item in the list has embeddings
-            return any(self._has_embeddings(item) for item in data)
-        return False
+            model.parse_response(AsyncOutput(self.s3_client, output_s3_uri))
+        except Exception as e:
+            detail = str(e).strip()
+            if detail and "NoSuchKey" not in detail and "Not Found" not in detail:
+                return f"Async embedding failed: {detail}"
+        message = (job.get('failureMessage') or '').strip()
+        return f"Async embedding failed: {message or 'Bedrock reported the job as Failed without a failure message'}"
 
 
 class S3VectorService:

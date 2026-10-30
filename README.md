@@ -7,7 +7,7 @@ Amazon S3 Vectors Embed CLI is a standalone command-line tool that simplifies th
 **s3vectors-embed put**: Embed text, file content, or S3 objects and store them as vectors in an S3 vector index.
 You can create and ingest vector embeddings into an S3 vector index using a single put command. You specify the data input you want to create an embedding for, an Amazon Bedrock embeddings model ID, your S3 vector bucket name, and S3 vector index name. The command supports several input formats including text data, a local text or image file, an S3 image or text object or prefix. The command generates embeddings using the dimensions configured in your S3 vector index properties. If you are ingesting embeddings for several objects in an S3 prefix or local file path, it automatically uses batch processes to maximize throughput. 
 
-**Note**: Each file is processed as a single embedding. Document chunking is not currently supported. 
+**Note**: Each file is processed as a single embedding. Document chunking is not currently supported, except for Amazon Nova async processing, which splits text, video and audio inputs into segments and stores one embedding per segment.
 
 **s3vectors-embed query**: Embed a query input and search for similar vectors in an S3 vector index.
 You can perform similarity queries for vector embeddings in your S3 vector index using a single query command. You specify your query input, an Amazon Bedrock embeddings model ID, the vector bucket name, and vector index name. The command accepts several types of query inputs like a text string, an image file, or a single S3 text or image object. The command generates embeddings for your query using the input embeddings model and then performs a similarity search to find the most relevant matches. You can control the number of results returned, apply metadata filters to narrow your search, and choose whether to include similarity distance in the results for comprehensive analysis.
@@ -21,8 +21,8 @@ Additionally, the `--query-input` parameter in the query command has been replac
 - **`--text-value`**: Direct text query string (preferred for text queries)
 - **`--text`**: Text file path (local file or S3 URI)
 - **`--image`**: Image file path (local file or S3 URI)
-- **`--video`**: Video file path (local file or S3 URI) - TwelveLabs models only
-- **`--audio`**: Audio file path (local file or S3 URI) - TwelveLabs models only
+- **`--video`**: Video file path (local file or S3 URI) - TwelveLabs and Nova models only
+- **`--audio`**: Audio file path (local file or S3 URI) - TwelveLabs and Nova models only
 
 ## Installation and Configuration
 ### Prerequisites
@@ -253,6 +253,90 @@ s3vectors-embed put \
   --src-bucket-owner 123456789012  # Optional: only needed for cross-account access
 ```
 
+#### **Examples for the Amazon Nova Multimodal Embeddings Model (Sync and Async Processing)**
+
+**Note:** The Amazon Nova model (`amazon.nova-2-multimodal-embeddings-v1:0`) embeds text, image, video and audio, one input type per request. Without `--async-output-s3-uri`, Bedrock processes the input synchronously and returns a single embedding (two for video in `AUDIO_VIDEO_SEPARATE` mode: one audio, one video); synchronous text is limited to 8,192 characters and synchronous video and audio to 30 seconds. With `--async-output-s3-uri`, Bedrock processes the input asynchronously, splits text, video and audio into segments, and first stores the embedding output in a general purpose S3 bucket that you specify; each segment is stored as its own vector. Asynchronous processing accepts S3 inputs only.
+
+20. **Nova embeddings for text data (sync):**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --text-value "Spiderman flies through a street and catches a car with his web"
+```
+
+21. **Nova embeddings for a local image file (sync):**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --image ./photo.jpg
+```
+
+22. **Nova embeddings for a local video file (sync, up to 30 seconds and 25MB after base64 encoding):**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --video ./short-clip.mp4
+```
+
+23. **Nova embeddings for a local audio file (sync, up to 30 seconds and 25MB after base64 encoding):**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --audio ./short-audio.wav
+```
+
+24. **Nova embeddings for an S3 text file (async, split into segments of up to 32,000 characters by default):**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --text s3://my-bucket/long-document.txt \
+  --async-output-s3-uri s3://my-async-bucket
+```
+
+25. **Nova embeddings for an S3 URI video input (async, 5-second segments by default, up to 2GB):**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --video s3://my-bucket/large-video.mp4 \
+  --async-output-s3-uri s3://my-async-bucket \
+  --src-bucket-owner 123456789012  # Optional: only needed for cross-account access
+```
+
+26. **Nova embeddings for an S3 URI audio input with a custom segment length (async):**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --audio s3://my-bucket/audio.mp3 \
+  --async-output-s3-uri s3://my-async-bucket \
+  --bedrock-inference-params '{"segmentedEmbeddingParams": {"audio": {"segmentationConfig": {"durationSeconds": 10}}}}'
+```
+
+27. **Nova embeddings for a video file with separate audio and video embeddings (async):**
+```bash
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --video s3://my-bucket/video.mp4 \
+  --async-output-s3-uri s3://my-async-bucket \
+  --bedrock-inference-params '{"segmentedEmbeddingParams": {"video": {"embeddingMode": "AUDIO_VIDEO_SEPARATE", "segmentationConfig": {"durationSeconds": 10}}}}' \
+  --metadata '{"source": "marketing", "campaign": "2024-q1"}'
+```
+
 #### **Query Examples**
 
 1. **Direct text query:**
@@ -424,6 +508,48 @@ s3vectors-embed put \
   --metadata '{"batch": "multimodal_processing"}' \
   --max-workers 4
 
+16. **Nova: Direct text query (sync):**
+```bash
+s3vectors-embed query \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --text-value "red sports car chase" \
+  --k 5
+```
+
+17. **Nova: Cross-modal text search over video embeddings (sync):**
+```bash
+s3vectors-embed query \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --text-value "red sports car chase" \
+  --bedrock-inference-params '{"singleEmbeddingParams": {"embeddingPurpose": "VIDEO_RETRIEVAL"}}' \
+  --k 5
+```
+
+18. **Nova: Image query (sync):**
+```bash
+s3vectors-embed query \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --image "./query-image.jpg" \
+  --k 5
+```
+
+19. **Nova: Query using an S3 video input (async, uses the first segment, 0-5 seconds by default):**
+```bash
+s3vectors-embed query \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --video "s3://my-bucket/query-video.mp4" \
+  --async-output-s3-uri s3://my-async-bucket \
+  --k 5
+```
+
 ### Command Parameters
 
 #### Global Options
@@ -449,11 +575,11 @@ Input Options (one required):
   - **Local wildcard**: `./data/*.jpg`
   - **S3 object**: `s3://bucket/path/file.jpg`
   - **S3 path with wildcard characters**: `s3://bucket/path/*` (prefix-based, not extension-based)
-- `--video`: Video input for TwelveLabs models - supports:
-  - **Local file**: `./video.mp4` (up to 36MB for TwelveLabs models)
+- `--video`: Video input for TwelveLabs and Nova models - supports:
+  - **Local file**: `./video.mp4` (up to 36MB for TwelveLabs models; for Nova, sync only, up to 30 seconds and 25MB after base64 encoding)
   - **S3 URI**: `s3://bucket/path/video.mp4` 
-- `--audio`: Audio input for TwelveLabs models - supports:
-  - **Local file**: `./audio.wav` (up to 36MB for TwelveLabs models)
+- `--audio`: Audio input for TwelveLabs and Nova models - supports:
+  - **Local file**: `./audio.wav` (up to 36MB for TwelveLabs models; for Nova, sync only, up to 30 seconds and 25MB after base64 encoding)
   - **S3 URI**: `s3://bucket/path/audio.wav`
 
 Optional:
@@ -484,6 +610,23 @@ Use `--bedrock-inference-params '{...}'` for TwelveLabs-specific options:
 --bedrock-inference-params '{"embeddingOption": ["visual-text", "audio"], "startSec": 30.0, "useFixedLengthSec": 5}'
 ```
 
+**Nova-Specific Parameters:**
+- `--async-output-s3-uri`: S3 URI for async processing results (optional for Nova models; when provided, Nova processes the input asynchronously and splits text, video and audio into segments, one vector per segment; the input must be an S3 URI)
+
+**Nova Model Parameters (via `--bedrock-inference-params`):**
+Use `--bedrock-inference-params '{...}'` in the Nova request shape: parameters go under `singleEmbeddingParams` for sync processing or `segmentedEmbeddingParams` for async processing, and modality options go under the modality key (`text`, `image`, `video`, `audio`):
+- `embeddingPurpose`: `GENERIC_INDEX` (default for put), `TEXT_RETRIEVAL`, `IMAGE_RETRIEVAL`, `VIDEO_RETRIEVAL`, `DOCUMENT_RETRIEVAL`, `AUDIO_RETRIEVAL`, `GENERIC_RETRIEVAL`, `CLASSIFICATION`, `CLUSTERING`
+- `text.truncationMode`: `"START"`, `"END"` or `"NONE"` (default: `"END"`)
+- `image.detailLevel`: `"STANDARD_IMAGE"` or `"DOCUMENT_IMAGE"` (default: `"STANDARD_IMAGE"`)
+- `video.embeddingMode`: `"AUDIO_VIDEO_COMBINED"` or `"AUDIO_VIDEO_SEPARATE"` (default: `"AUDIO_VIDEO_COMBINED"`)
+- `text.segmentationConfig.maxLengthChars`: Segment length for async text (800-50,000 characters, default: 32,000)
+- `video.segmentationConfig.durationSeconds` / `audio.segmentationConfig.durationSeconds`: Segment length for async video and audio (1-30 seconds, default: 5)
+
+**Example:**
+```bash
+--bedrock-inference-params '{"segmentedEmbeddingParams": {"video": {"embeddingMode": "AUDIO_VIDEO_SEPARATE", "segmentationConfig": {"durationSeconds": 10}}}}'
+```
+
 #### Query Command Parameters
 
 **Core Required Parameters:**
@@ -495,8 +638,8 @@ Use `--bedrock-inference-params '{...}'` for TwelveLabs-specific options:
 - `--text-value`: Direct text query string
 - `--text`: Text file path (local file or S3 URI)
 - `--image`: Image file path (local file or S3 URI)
-- `--video`: Video file path (local file or S3 URI) - TwelveLabs models only
-- `--audio`: Audio file path (local file or S3 URI) - TwelveLabs models only
+- `--video`: Video file path (local file or S3 URI) - TwelveLabs and Nova models only
+- `--audio`: Audio file path (local file or S3 URI) - TwelveLabs and Nova models only
 
 **TwelveLabs-Specific Parameters:**
 - `--async-output-s3-uri`: S3 URI for async output (required for TwelveLabs models, e.g., s3://my-bucket/path)
@@ -511,6 +654,18 @@ Use `--bedrock-inference-params '{...}'` for TwelveLabs query options:
 **Example:**
 ```bash
 --bedrock-inference-params '{"embeddingOption": ["visual-text"], "startSec": 30.0, "useFixedLengthSec": 8}'
+```
+
+**Nova-Specific Parameters:**
+- `--async-output-s3-uri`: S3 URI for async output (optional for Nova models; when provided, the query input must be an S3 URI and the first segment's embedding is used for the search)
+
+**Nova Model Parameters (via `--bedrock-inference-params`):**
+Use `--bedrock-inference-params '{...}'` in the Nova request shape (`singleEmbeddingParams` for sync, `segmentedEmbeddingParams` for async):
+- `embeddingPurpose`: Defaults to the retrieval purpose of the query input type (`TEXT_RETRIEVAL`, `IMAGE_RETRIEVAL`, `VIDEO_RETRIEVAL` or `AUDIO_RETRIEVAL`); set `VIDEO_RETRIEVAL`, for example, to search video embeddings with a text query, or `GENERIC_RETRIEVAL` for an index with mixed input types
+
+**Example:**
+```bash
+--bedrock-inference-params '{"singleEmbeddingParams": {"embeddingPurpose": "VIDEO_RETRIEVAL"}}'
 ```
 
 **Optional Parameters:**
@@ -547,6 +702,11 @@ s3vectors-embed query --vector-bucket-name my-bucket --index-name my-index \
   --model-id twelvelabs.marengo-embed-2-7-v1:0 --text-value "red sports car chase" \
   --async-output-s3-uri s3://my-async-bucket --k 5
 
+# Nova cross-modal search
+s3vectors-embed query --vector-bucket-name my-bucket --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 --text-value "red sports car chase" \
+  --bedrock-inference-params '{"singleEmbeddingParams": {"embeddingPurpose": "VIDEO_RETRIEVAL"}}' --k 5
+
 ```
 
 ### Model Compatibility
@@ -558,8 +718,11 @@ s3vectors-embed query --vector-bucket-name my-bucket --index-name my-index \
 | `cohere.embed-english-v3` | Multimodal (Text or Image) | 1024 | Advanced English text or image embedding | Sync |
 | `cohere.embed-multilingual-v3` | Multimodal (Text or Image) | 1024 | Multilingual text or image embedding | Sync |
 | `twelvelabs.marengo-embed-2-7-v1:0` | Multimodal (Video, Audio, Text, Image) | 1024 | Video and audio understanding | **Async** |
+| `amazon.nova-2-multimodal-embeddings-v1:0` | Multimodal (Text, Image, Video, Audio) | 3072, 1024, 384, 256 | Cross-modal text, image, video and audio embedding | Sync and **Async** |
 
 **Note**: TwelveLabs models require async processing (~60 seconds) and an S3 general purpose bucket location to store the interim embedding results. 
+
+**Note**: Nova models use sync processing by default and async processing when `--async-output-s3-uri` is provided. Async processing requires S3 inputs and splits text, video and audio into segments, storing one vector per segment.
 
 ## Advanced Model Parameters
 
@@ -616,6 +779,31 @@ s3vectors-embed put \
   --async-output-s3-uri s3://my-bucket \
   --bedrock-inference-params '{"startSec": 30.0, "useFixedLengthSec": 10, "embeddingOption": ["visual-text"]}'
 ```
+
+##### **Amazon Nova Models**
+
+Nova parameters are written in the Nova request shape and merged into the request the CLI builds: use `singleEmbeddingParams` for sync processing and `segmentedEmbeddingParams` for async processing (when `--async-output-s3-uri` is provided). Flat keys such as `{"embeddingMode": "AUDIO_VIDEO_SEPARATE"}` are not moved into place and are rejected by Bedrock.
+
+```bash
+# Nova - Text truncation (sync)
+s3vectors-embed put \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --text-value "Long text content..." \
+  --bedrock-inference-params '{"singleEmbeddingParams": {"text": {"truncationMode": "START"}}}'
+
+# Nova - Document image detail level (sync)
+s3vectors-embed put \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --image ./scanned-page.png \
+  --bedrock-inference-params '{"singleEmbeddingParams": {"embeddingPurpose": "GENERIC_INDEX", "image": {"detailLevel": "DOCUMENT_IMAGE"}}}'
+
+# Nova - Video segmentation and embedding mode (async)
+s3vectors-embed put \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --video s3://bucket/video.mp4 \
+  --async-output-s3-uri s3://my-bucket \
+  --bedrock-inference-params '{"segmentedEmbeddingParams": {"video": {"embeddingMode": "AUDIO_VIDEO_SEPARATE", "segmentationConfig": {"durationSeconds": 10}}}}'
+```
 #### **Valid Parameters by Model**
 
 | Model | Valid Parameters | Example Values |
@@ -625,6 +813,7 @@ s3vectors-embed put \
 | **Titan Image v1** | `normalize` | `false`|
 | **Cohere English/Multilingual** | `truncate` | `"END"`, `"NONE"` |
 | **TwelveLabs Marengo** | `textTruncate`, `startSec`, `lengthSec`, `useFixedLengthSec`, `embeddingOption`, `minClipSec` | `"end"`, `30.0`, `60.0`, `5`, `["visual-text"]`, `2` |
+| **Nova Multimodal Embeddings** | `embeddingPurpose`, `text.truncationMode`, `image.detailLevel`, `video.embeddingMode`, `text.segmentationConfig.maxLengthChars`, `video`/`audio.segmentationConfig.durationSeconds` (nested under `singleEmbeddingParams` or `segmentedEmbeddingParams`) | `"VIDEO_RETRIEVAL"`, `"START"`, `"DOCUMENT_IMAGE"`, `"AUDIO_VIDEO_SEPARATE"`, `10000`, `10` |
 
 #### **Best Practices**
 
@@ -647,12 +836,14 @@ s3vectors-embed put \
 # Control how long text is handled
 --bedrock-inference-params '{"truncate": "END"}'  # Cohere
 --bedrock-inference-params '{"textTruncate": "end"}'  # TwelveLabs
+--bedrock-inference-params '{"singleEmbeddingParams": {"text": {"truncationMode": "END"}}}'  # Nova
 ```
 
 ##### **Video Processing Control**
 ```bash
 # Precise video segment processing
---bedrock-inference-params '{"startSec": 45.0, "useFixedLengthSec": 8, "embeddingOption": ["visual-text", "audio"]}'
+--bedrock-inference-params '{"startSec": 45.0, "useFixedLengthSec": 8, "embeddingOption": ["visual-text", "audio"]}'  # TwelveLabs
+--bedrock-inference-params '{"segmentedEmbeddingParams": {"video": {"segmentationConfig": {"durationSeconds": 8}}}}'  # Nova
 ```
 
 #### **Error Handling**
@@ -1083,8 +1274,10 @@ The CLI automatically selects the optimal processing strategy based on content t
 |--------------|----------------|----------|----------------|---------|
 | **Text**  | Sync  | `InvokeModel` | Parallel batch storage | Single vector per file |
 | **Image** | Sync  | `InvokeModel` | Parallel batch storage | Single vector per file |
-| **Text**  | Async | `StartAsyncInvoke` | Parallel batch storage | Single vector per file |
+| **Text**  | Async | `StartAsyncInvoke` | Parallel batch storage | Single vector per file (Nova: one vector per segment) |
 | **Image** | Async | `StartAsyncInvoke` | Parallel batch storage | Single vector per file |
+| **Video** | Sync (Nova) | `InvokeModel` | Per-file storage | Single vector per file (two in `AUDIO_VIDEO_SEPARATE` mode) |
+| **Audio** | Sync (Nova) | `InvokeModel` | Per-file storage | Single vector per file |
 | **Video** | Async | `StartAsyncInvoke` | Per-file storage | Multiple vectors per file |
 | **Audio** | Async | `StartAsyncInvoke` | Per-file storage | Multiple vectors per file |
 
@@ -1153,6 +1346,17 @@ s3vectors-embed put \
   --audio "s3://bucket/audio/*" \
   --async-output-s3-uri s3://my-async-bucket \
   --bedrock-inference-params '{"startSec": 10, "useFixedLengthSec": 8}' \
+  --max-workers 2
+
+# Nova S3 video batch processing (async, S3 inputs only)
+s3vectors-embed put \
+  --vector-bucket-name my-bucket \
+  --index-name my-index \
+  --model-id amazon.nova-2-multimodal-embeddings-v1:0 \
+  --video "s3://bucket/videos/*" \
+  --async-output-s3-uri s3://my-async-bucket \
+  --bedrock-inference-params '{"segmentedEmbeddingParams": {"video": {"segmentationConfig": {"durationSeconds": 10}}}}' \
+  --metadata '{"batch": "nova_video_processing"}' \
   --max-workers 2
 ```
 

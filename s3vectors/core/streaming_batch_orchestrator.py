@@ -225,105 +225,32 @@ class StreamingBatchOrchestrator:
         if chunk:
             yield chunk
     
+    # Hard S3 Vectors service limit: at most 500 vectors per PutVectors call.
+    MAX_VECTORS_PER_PUT = 500
+
+    # Modalities whose files each produce a self-contained set of vectors
+    # (one per clip/segment) that are stored in their own put_vectors call.
+    PER_FILE_STORAGE_MODALITIES = {"video", "audio"}
+
     def _process_chunk(self, chunk_files: List[str], content_type: str,
                       vector_bucket_name: str, index_name: str, 
                       metadata: Dict[str, Any], batch_context: Dict[str, Any]) -> Tuple[int, int, List[str], List[str]]:
-        """Process a chunk of files using UnifiedProcessor."""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        
-        processed_count = 0
-        failed_count = 0
-        processed_keys = []
-        errors = []
-        
-        # For video/audio, process sequentially due to async nature
-        # For text/image, use parallel processing
-        if content_type in ["video", "audio"]:
-            return self._process_chunk_async(chunk_files, content_type, vector_bucket_name, 
-                                           index_name, metadata, batch_context)
-        else:
-            return self._process_chunk_sync(chunk_files, content_type, vector_bucket_name,
-                                          index_name, metadata, batch_context)
-    
-    def _process_chunk_sync(self, chunk_files: List[str], content_type: str,
-                           vector_bucket_name: str, index_name: str, 
-                           metadata: Dict[str, Any], batch_context: Dict[str, Any]) -> Tuple[int, int, List[str], List[str]]:
-        """Process text/image files in parallel (existing logic)."""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        
-        processed_count = 0
-        failed_count = 0
-        processed_keys = []
-        errors = []
-        vectors_to_store = []
-        
-        # Process files in parallel
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            # Submit all files for processing
-            future_to_file = {}
-            for file_path in chunk_files:
-                # Create appropriate ProcessingInput - use file_path key for both S3 and local files
-                processing_input = ProcessingInput(
-                    content_type, {"file_path": file_path}, file_path, metadata,
-                    filename_as_key=batch_context['filename_as_key'],
-                    key_prefix=batch_context['key_prefix']
-                )
-                
-                future = executor.submit(
-                    self.unified_processor.process,
-                    batch_context['model'],
-                    processing_input,
-                    batch_context['user_bedrock_params'],
-                    batch_context['async_output_s3_uri'],
-                    batch_context['src_bucket_owner'],
-                    vector_bucket_name,
-                    index_name,
-                    batch_context['index_dimensions']  # Pass precomputed dimensions
-                )
-                future_to_file[future] = file_path
-            
-            # Collect results with interim status updates
-            completed_files = 0
-            for future in as_completed(future_to_file):
-                file_path = future_to_file[future]
-                try:
-                    result = future.result()
-                    if result and result.vectors:
-                        vectors_to_store.extend(result.vectors)
-                        processed_keys.extend([v.get("key", "") for v in result.vectors])
-                        processed_count += len(result.vectors)
-                    else:
-                        failed_count += 1
-                        errors.append(f"No vectors generated for {file_path}")
-                except Exception as e:
-                    failed_count += 1
-                    errors.append(f"Error processing {file_path}: {str(e)}")
-                
-                completed_files += 1
-                # Print interim status every 100 files
-                if completed_files % 100 == 0:
-                    print(f"Progress: {completed_files}/{len(chunk_files)} files processed ({processed_count} successful, {failed_count} failed)")
-        
-        # Store vectors in batch
-        if vectors_to_store:
-            try:
-                self.unified_processor.s3vector_service.put_vectors_batch(
-                    vector_bucket_name, index_name, vectors_to_store
-                )
-                print(f"STORED BATCH: {len(vectors_to_store)} vectors")
-            except Exception as e:
-                errors.append(f"Batch storage failed: {str(e)}")
-                # Mark all as failed if storage fails
-                failed_count += processed_count
-                processed_count = 0
-                processed_keys = []
-        
-        return processed_count, failed_count, processed_keys, errors
-    
-    def _process_chunk_async(self, chunk_files: List[str], content_type: str,
-                            vector_bucket_name: str, index_name: str, 
-                            metadata: Dict[str, Any], batch_context: Dict[str, Any]) -> Tuple[int, int, List[str], List[str]]:
-        """Process video/audio files with parallel async processing."""
+        """Process a chunk of files in parallel using UnifiedProcessor.
+
+        Embedding is one path for all models and modalities: UnifiedProcessor
+        owns the sync/async split. Storage strategy depends on the modality:
+
+        - text/image: each file yields one vector, so vectors from all files
+          in the chunk are pooled and written in put_vectors calls of up to
+          min(batch_size, 500) vectors. A file is never split across calls.
+        - video/audio: each file yields one vector per clip/segment, all of
+          which are written together in that file's own put_vectors call as
+          soon as the file completes. Only a file with more clips than
+          min(batch_size, 500) is sliced, to respect the service cap.
+
+        Storage failures are recorded against the files involved and
+        processing continues; there is no retry.
+        """
         from concurrent.futures import ThreadPoolExecutor, as_completed
         
         processed_files_count = 0  # Count files, not vectors
@@ -332,12 +259,40 @@ class StreamingBatchOrchestrator:
         errors = []
         
         total_files = len(chunk_files)
+        store_size = min(batch_context['batch_size'], self.MAX_VECTORS_PER_PUT)
+        per_file_storage = content_type in self.PER_FILE_STORAGE_MODALITIES
+        
+        # Pooled buffer for text/image: vectors and the files they came from.
+        pooled_vectors: List[Dict[str, Any]] = []
+        pooled_files: List[str] = []
+        
+        def flush_pooled():
+            """Write the pooled buffer in one put_vectors call and reset it."""
+            nonlocal processed_files_count, failed_files_count
+            if not pooled_vectors:
+                return
+            try:
+                self.unified_processor.s3vector_service.put_vectors_batch(
+                    vector_bucket_name, index_name, list(pooled_vectors)
+                )
+                processed_files_count += len(pooled_files)
+                processed_keys.extend([v.get("key", "") for v in pooled_vectors])
+                print(f"STORED BATCH: {len(pooled_vectors)} vectors from {len(pooled_files)} files")
+            except Exception as e:
+                failed_files_count += len(pooled_files)
+                errors.append(
+                    f"Storage failed for {len(pooled_files)} files "
+                    f"({', '.join(pooled_files)}): {str(e)}"
+                )
+            pooled_vectors.clear()
+            pooled_files.clear()
+        
         print(f"Processing {total_files} {content_type} files with {self.max_workers} concurrent workers...")
         
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             future_to_file = {}
             
-            # Submit all files for async processing
+            # Submit all files for processing
             for file_path in chunk_files:
                 processing_input = ProcessingInput(
                     content_type, {"file_path": file_path}, file_path, metadata,
@@ -366,41 +321,48 @@ class StreamingBatchOrchestrator:
                 
                 try:
                     result = future.result()
-                    
-                    if result and result.vectors:
-                        # Store vectors from this file, chunking if needed
-                        try:
-                            file_vector_count = len(result.vectors)
-                            batch_size = batch_context['batch_size']
-                            
-                            if file_vector_count <= batch_size:
-                                # Small file - single API call
-                                self.unified_processor.s3vector_service.put_vectors_batch(
-                                    vector_bucket_name, index_name, result.vectors
-                                )
-                            else:
-                                # Large file - chunk into batch_size pieces
-                                for i in range(0, file_vector_count, batch_size):
-                                    chunk = result.vectors[i:i + batch_size]
-                                    self.unified_processor.s3vector_service.put_vectors_batch(
-                                        vector_bucket_name, index_name, chunk
-                                    )
-                            
-                            processed_files_count += 1  # Count files, not vectors
-                            processed_keys.extend([v.get("key", "") for v in result.vectors])
-                            
-                            print(f"[{completed_files}/{total_files}] Stored {file_vector_count} vectors from {file_path}")
-                            
-                        except Exception as e:
-                            failed_files_count += 1
-                            errors.append(f"Storage failed for {file_path}: {str(e)}")
-                            
-                    else:
-                        failed_files_count += 1
-                        errors.append(f"No vectors generated for {file_path}")
-                        
                 except Exception as e:
                     failed_files_count += 1
                     errors.append(f"Error processing {file_path}: {str(e)}")
+                    continue
+
+                if not (result and result.vectors):
+                    failed_files_count += 1
+                    errors.append(f"No vectors generated for {file_path}")
+                    continue
+
+                file_vector_count = len(result.vectors)
+
+                if per_file_storage:
+                    # Video/audio: this file's clips go in their own call(s).
+                    try:
+                        for i in range(0, file_vector_count, store_size):
+                            vector_slice = result.vectors[i:i + store_size]
+                            self.unified_processor.s3vector_service.put_vectors_batch(
+                                vector_bucket_name, index_name, vector_slice
+                            )
+                        processed_files_count += 1
+                        processed_keys.extend([v.get("key", "") for v in result.vectors])
+                        print(f"[{completed_files}/{total_files}] Stored {file_vector_count} vectors from {file_path}")
+                    except Exception as e:
+                        failed_files_count += 1
+                        errors.append(f"Storage failed for {file_path}: {str(e)}")
+                else:
+                    # Text/image: pool across files. Flush first if this file's
+                    # vectors wouldn't fit, so a file is never split across calls.
+                    if pooled_vectors and len(pooled_vectors) + file_vector_count > store_size:
+                        flush_pooled()
+                    pooled_vectors.extend(result.vectors)
+                    pooled_files.append(file_path)
+                    if len(pooled_vectors) >= store_size:
+                        flush_pooled()
+
+                    if completed_files % 100 == 0:
+                        print(f"Progress: {completed_files}/{total_files} files processed "
+                              f"({processed_files_count} stored, {failed_files_count} failed, "
+                              f"{len(pooled_files)} pending store)")
+
+        # Write whatever is left in the pool after the last file completes.
+        flush_pooled()
         
         return processed_files_count, failed_files_count, processed_keys, errors

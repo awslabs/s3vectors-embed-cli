@@ -1,0 +1,1004 @@
+[
+  {
+    "model_id": "amazon.titan-embed-text-v1",
+    "modality": "text",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1536,
+      "text": "hello world"
+    },
+    "expected": {
+      "inputText": "hello world"
+    }
+  },
+  {
+    "model_id": "amazon.titan-embed-text-v2:0",
+    "modality": "text",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "hello world"
+    },
+    "expected": {
+      "inputText": "hello world",
+      "dimensions": 1024
+    }
+  },
+  {
+    "model_id": "amazon.titan-embed-image-v1",
+    "modality": "text",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "hello world"
+    },
+    "expected": {
+      "inputText": "hello world",
+      "embeddingConfig": {
+        "outputEmbeddingLength": 1024
+      }
+    }
+  },
+  {
+    "model_id": "amazon.titan-embed-image-v1",
+    "modality": "image",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "cat.png",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "inputImage": "QUJDRA==",
+      "embeddingConfig": {
+        "outputEmbeddingLength": 1024
+      }
+    }
+  },
+  {
+    "model_id": "amazon.titan-embed-image-v1",
+    "modality": "multimodal",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "a cat",
+      "file_path": "cat.png",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "inputText": "a cat",
+      "inputImage": "QUJDRA==",
+      "embeddingConfig": {
+        "outputEmbeddingLength": 1024
+      }
+    }
+  },
+  {
+    "model_id": "cohere.embed-english-v3",
+    "modality": "text",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "hello world"
+    },
+    "expected": {
+      "texts": [
+        "hello world"
+      ],
+      "input_type": "search_document"
+    }
+  },
+  {
+    "model_id": "cohere.embed-english-v3",
+    "modality": "image",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "cat.png",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "images": [
+        "data:image/png;base64,QUJDRA=="
+      ],
+      "input_type": "image"
+    }
+  },
+  {
+    "model_id": "cohere.embed-multilingual-v3",
+    "modality": "text",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "hello world"
+    },
+    "expected": {
+      "texts": [
+        "hello world"
+      ],
+      "input_type": "search_document"
+    }
+  },
+  {
+    "model_id": "cohere.embed-multilingual-v3",
+    "modality": "image",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "cat.png",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "images": [
+        "data:image/png;base64,QUJDRA=="
+      ],
+      "input_type": "image"
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "text",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "hello world"
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SINGLE_EMBEDDING",
+      "singleEmbeddingParams": {
+        "embeddingPurpose": "GENERIC_INDEX",
+        "embeddingDimension": 1024,
+        "text": {
+          "truncationMode": "END",
+          "value": "hello world"
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "text",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "from s3 file",
+      "file_path": "s3://src/doc.txt"
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SINGLE_EMBEDDING",
+      "singleEmbeddingParams": {
+        "embeddingPurpose": "GENERIC_INDEX",
+        "embeddingDimension": 1024,
+        "text": {
+          "truncationMode": "END",
+          "value": "from s3 file"
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "image",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "cat.JPG",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SINGLE_EMBEDDING",
+      "singleEmbeddingParams": {
+        "embeddingPurpose": "GENERIC_INDEX",
+        "embeddingDimension": 1024,
+        "image": {
+          "format": "jpeg",
+          "source": {
+            "bytes": "QUJDRA=="
+          }
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "image",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/cat.png",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SINGLE_EMBEDDING",
+      "singleEmbeddingParams": {
+        "embeddingPurpose": "GENERIC_INDEX",
+        "embeddingDimension": 1024,
+        "image": {
+          "format": "png",
+          "source": {
+            "s3Location": {
+              "uri": "s3://src/cat.png"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "video",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/clip.mp4"
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SINGLE_EMBEDDING",
+      "singleEmbeddingParams": {
+        "embeddingPurpose": "GENERIC_INDEX",
+        "embeddingDimension": 1024,
+        "video": {
+          "format": "mp4",
+          "source": {
+            "s3Location": {
+              "uri": "s3://src/clip.mp4"
+            }
+          },
+          "embeddingMode": "AUDIO_VIDEO_COMBINED"
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "audio",
+    "mode": "sync",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/clip.wav"
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SINGLE_EMBEDDING",
+      "singleEmbeddingParams": {
+        "embeddingPurpose": "GENERIC_INDEX",
+        "embeddingDimension": 1024,
+        "audio": {
+          "format": "wav",
+          "source": {
+            "s3Location": {
+              "uri": "s3://src/clip.wav"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "text",
+    "mode": "async",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/doc.txt",
+      "src_bucket_owner": "123456789012",
+      "text": "from s3 file"
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SEGMENTED_EMBEDDING",
+      "segmentedEmbeddingParams": {
+        "embeddingPurpose": "GENERIC_INDEX",
+        "embeddingDimension": 1024,
+        "text": {
+          "truncationMode": "END",
+          "source": {
+            "s3Location": {
+              "uri": "s3://src/doc.txt",
+              "bucketOwner": "123456789012"
+            }
+          },
+          "segmentationConfig": {}
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "image",
+    "mode": "async",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/cat.png",
+      "src_bucket_owner": "123456789012",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SEGMENTED_EMBEDDING",
+      "segmentedEmbeddingParams": {
+        "embeddingPurpose": "GENERIC_INDEX",
+        "embeddingDimension": 1024,
+        "image": {
+          "format": "png",
+          "source": {
+            "s3Location": {
+              "uri": "s3://src/cat.png",
+              "bucketOwner": "123456789012"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "video",
+    "mode": "async",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/clip.mp4",
+      "src_bucket_owner": "123456789012"
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SEGMENTED_EMBEDDING",
+      "segmentedEmbeddingParams": {
+        "embeddingPurpose": "GENERIC_INDEX",
+        "embeddingDimension": 1024,
+        "video": {
+          "format": "mp4",
+          "source": {
+            "s3Location": {
+              "uri": "s3://src/clip.mp4",
+              "bucketOwner": "123456789012"
+            }
+          },
+          "embeddingMode": "AUDIO_VIDEO_COMBINED",
+          "segmentationConfig": {
+            "durationSeconds": 5
+          }
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "audio",
+    "mode": "async",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/clip.wav",
+      "src_bucket_owner": "123456789012"
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SEGMENTED_EMBEDDING",
+      "segmentedEmbeddingParams": {
+        "embeddingPurpose": "GENERIC_INDEX",
+        "embeddingDimension": 1024,
+        "audio": {
+          "format": "wav",
+          "source": {
+            "s3Location": {
+              "uri": "s3://src/clip.wav",
+              "bucketOwner": "123456789012"
+            }
+          },
+          "segmentationConfig": {
+            "durationSeconds": 5
+          }
+        }
+      }
+    }
+  },
+  {
+    "model_id": "twelvelabs.marengo-embed-2-7-v1:0",
+    "modality": "text",
+    "mode": "async",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "hello world",
+      "src_bucket_owner": "123456789012"
+    },
+    "expected": {
+      "inputType": "text",
+      "inputText": "hello world"
+    }
+  },
+  {
+    "model_id": "twelvelabs.marengo-embed-2-7-v1:0",
+    "modality": "image",
+    "mode": "async",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/cat.png",
+      "src_bucket_owner": "123456789012",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "inputType": "image",
+      "mediaSource": {
+        "s3Location": {
+          "uri": "s3://src/cat.png",
+          "bucketOwner": "123456789012"
+        }
+      }
+    }
+  },
+  {
+    "model_id": "twelvelabs.marengo-embed-2-7-v1:0",
+    "modality": "video",
+    "mode": "async",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/clip.mp4",
+      "src_bucket_owner": "123456789012"
+    },
+    "expected": {
+      "inputType": "video",
+      "mediaSource": {
+        "s3Location": {
+          "uri": "s3://src/clip.mp4",
+          "bucketOwner": "123456789012"
+        }
+      }
+    }
+  },
+  {
+    "model_id": "twelvelabs.marengo-embed-2-7-v1:0",
+    "modality": "audio",
+    "mode": "async",
+    "operation": "put",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/clip.wav",
+      "src_bucket_owner": "123456789012"
+    },
+    "expected": {
+      "inputType": "audio",
+      "mediaSource": {
+        "s3Location": {
+          "uri": "s3://src/clip.wav",
+          "bucketOwner": "123456789012"
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.titan-embed-text-v1",
+    "modality": "text",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1536,
+      "text": "hello world"
+    },
+    "expected": {
+      "inputText": "hello world"
+    }
+  },
+  {
+    "model_id": "amazon.titan-embed-text-v2:0",
+    "modality": "text",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "hello world"
+    },
+    "expected": {
+      "inputText": "hello world",
+      "dimensions": 1024
+    }
+  },
+  {
+    "model_id": "amazon.titan-embed-image-v1",
+    "modality": "text",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "hello world"
+    },
+    "expected": {
+      "inputText": "hello world",
+      "embeddingConfig": {
+        "outputEmbeddingLength": 1024
+      }
+    }
+  },
+  {
+    "model_id": "amazon.titan-embed-image-v1",
+    "modality": "image",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "cat.png",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "inputImage": "QUJDRA==",
+      "embeddingConfig": {
+        "outputEmbeddingLength": 1024
+      }
+    }
+  },
+  {
+    "model_id": "amazon.titan-embed-image-v1",
+    "modality": "multimodal",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "a cat",
+      "file_path": "cat.png",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "inputText": "a cat",
+      "inputImage": "QUJDRA==",
+      "embeddingConfig": {
+        "outputEmbeddingLength": 1024
+      }
+    }
+  },
+  {
+    "model_id": "cohere.embed-english-v3",
+    "modality": "text",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "hello world"
+    },
+    "expected": {
+      "texts": [
+        "hello world"
+      ],
+      "input_type": "search_document"
+    }
+  },
+  {
+    "model_id": "cohere.embed-english-v3",
+    "modality": "image",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "cat.png",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "images": [
+        "data:image/png;base64,QUJDRA=="
+      ],
+      "input_type": "image"
+    }
+  },
+  {
+    "model_id": "cohere.embed-multilingual-v3",
+    "modality": "text",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "hello world"
+    },
+    "expected": {
+      "texts": [
+        "hello world"
+      ],
+      "input_type": "search_document"
+    }
+  },
+  {
+    "model_id": "cohere.embed-multilingual-v3",
+    "modality": "image",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "cat.png",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "images": [
+        "data:image/png;base64,QUJDRA=="
+      ],
+      "input_type": "image"
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "text",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "hello world"
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SINGLE_EMBEDDING",
+      "singleEmbeddingParams": {
+        "embeddingPurpose": "TEXT_RETRIEVAL",
+        "embeddingDimension": 1024,
+        "text": {
+          "truncationMode": "END",
+          "value": "hello world"
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "text",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "from s3 file",
+      "file_path": "s3://src/doc.txt"
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SINGLE_EMBEDDING",
+      "singleEmbeddingParams": {
+        "embeddingPurpose": "TEXT_RETRIEVAL",
+        "embeddingDimension": 1024,
+        "text": {
+          "truncationMode": "END",
+          "value": "from s3 file"
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "image",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "cat.JPG",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SINGLE_EMBEDDING",
+      "singleEmbeddingParams": {
+        "embeddingPurpose": "IMAGE_RETRIEVAL",
+        "embeddingDimension": 1024,
+        "image": {
+          "format": "jpeg",
+          "source": {
+            "bytes": "QUJDRA=="
+          }
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "image",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/cat.png",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SINGLE_EMBEDDING",
+      "singleEmbeddingParams": {
+        "embeddingPurpose": "IMAGE_RETRIEVAL",
+        "embeddingDimension": 1024,
+        "image": {
+          "format": "png",
+          "source": {
+            "s3Location": {
+              "uri": "s3://src/cat.png"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "video",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/clip.mp4"
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SINGLE_EMBEDDING",
+      "singleEmbeddingParams": {
+        "embeddingPurpose": "VIDEO_RETRIEVAL",
+        "embeddingDimension": 1024,
+        "video": {
+          "format": "mp4",
+          "source": {
+            "s3Location": {
+              "uri": "s3://src/clip.mp4"
+            }
+          },
+          "embeddingMode": "AUDIO_VIDEO_COMBINED"
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "audio",
+    "mode": "sync",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/clip.wav"
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SINGLE_EMBEDDING",
+      "singleEmbeddingParams": {
+        "embeddingPurpose": "AUDIO_RETRIEVAL",
+        "embeddingDimension": 1024,
+        "audio": {
+          "format": "wav",
+          "source": {
+            "s3Location": {
+              "uri": "s3://src/clip.wav"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "text",
+    "mode": "async",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/doc.txt",
+      "src_bucket_owner": "123456789012",
+      "text": "from s3 file"
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SEGMENTED_EMBEDDING",
+      "segmentedEmbeddingParams": {
+        "embeddingPurpose": "TEXT_RETRIEVAL",
+        "embeddingDimension": 1024,
+        "text": {
+          "truncationMode": "END",
+          "source": {
+            "s3Location": {
+              "uri": "s3://src/doc.txt",
+              "bucketOwner": "123456789012"
+            }
+          },
+          "segmentationConfig": {}
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "image",
+    "mode": "async",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/cat.png",
+      "src_bucket_owner": "123456789012",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SEGMENTED_EMBEDDING",
+      "segmentedEmbeddingParams": {
+        "embeddingPurpose": "IMAGE_RETRIEVAL",
+        "embeddingDimension": 1024,
+        "image": {
+          "format": "png",
+          "source": {
+            "s3Location": {
+              "uri": "s3://src/cat.png",
+              "bucketOwner": "123456789012"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "video",
+    "mode": "async",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/clip.mp4",
+      "src_bucket_owner": "123456789012"
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SEGMENTED_EMBEDDING",
+      "segmentedEmbeddingParams": {
+        "embeddingPurpose": "VIDEO_RETRIEVAL",
+        "embeddingDimension": 1024,
+        "video": {
+          "format": "mp4",
+          "source": {
+            "s3Location": {
+              "uri": "s3://src/clip.mp4",
+              "bucketOwner": "123456789012"
+            }
+          },
+          "embeddingMode": "AUDIO_VIDEO_COMBINED",
+          "segmentationConfig": {
+            "durationSeconds": 5
+          }
+        }
+      }
+    }
+  },
+  {
+    "model_id": "amazon.nova-2-multimodal-embeddings-v1:0",
+    "modality": "audio",
+    "mode": "async",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/clip.wav",
+      "src_bucket_owner": "123456789012"
+    },
+    "expected": {
+      "schemaVersion": "nova-multimodal-embed-v1",
+      "taskType": "SEGMENTED_EMBEDDING",
+      "segmentedEmbeddingParams": {
+        "embeddingPurpose": "AUDIO_RETRIEVAL",
+        "embeddingDimension": 1024,
+        "audio": {
+          "format": "wav",
+          "source": {
+            "s3Location": {
+              "uri": "s3://src/clip.wav",
+              "bucketOwner": "123456789012"
+            }
+          },
+          "segmentationConfig": {
+            "durationSeconds": 5
+          }
+        }
+      }
+    }
+  },
+  {
+    "model_id": "twelvelabs.marengo-embed-2-7-v1:0",
+    "modality": "text",
+    "mode": "async",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "text": "hello world",
+      "src_bucket_owner": "123456789012"
+    },
+    "expected": {
+      "inputType": "text",
+      "inputText": "hello world"
+    }
+  },
+  {
+    "model_id": "twelvelabs.marengo-embed-2-7-v1:0",
+    "modality": "image",
+    "mode": "async",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/cat.png",
+      "src_bucket_owner": "123456789012",
+      "image_base64": "QUJDRA==",
+      "image_data_uri": "data:image/png;base64,QUJDRA=="
+    },
+    "expected": {
+      "inputType": "image",
+      "mediaSource": {
+        "s3Location": {
+          "uri": "s3://src/cat.png",
+          "bucketOwner": "123456789012"
+        }
+      }
+    }
+  },
+  {
+    "model_id": "twelvelabs.marengo-embed-2-7-v1:0",
+    "modality": "video",
+    "mode": "async",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/clip.mp4",
+      "src_bucket_owner": "123456789012"
+    },
+    "expected": {
+      "inputType": "video",
+      "mediaSource": {
+        "s3Location": {
+          "uri": "s3://src/clip.mp4",
+          "bucketOwner": "123456789012"
+        }
+      }
+    }
+  },
+  {
+    "model_id": "twelvelabs.marengo-embed-2-7-v1:0",
+    "modality": "audio",
+    "mode": "async",
+    "operation": "query",
+    "ctx": {
+      "dimensions": 1024,
+      "file_path": "s3://src/clip.wav",
+      "src_bucket_owner": "123456789012"
+    },
+    "expected": {
+      "inputType": "audio",
+      "mediaSource": {
+        "s3Location": {
+          "uri": "s3://src/clip.wav",
+          "bucketOwner": "123456789012"
+        }
+      }
+    }
+  }
+]
